@@ -20,13 +20,11 @@ PREF_CMD = "csw"
 
 KEYCHAIN_CODE    = "Claude Code-credentials"
 KEYCHAIN_DESKTOP = "Claude Safe Storage"
-COOKIES_DB       = Path.home() / "Library/Application Support/Claude/Cookies"
 CLAUDE_JSON      = Path.home() / ".claude.json"
 CLAUDE_DIR       = Path.home() / ".claude"
+DESKTOP_DIR      = Path.home() / "Library/Application Support/Claude"
 
-# Profile tokens are stored in Keychain with these service prefixes
-KC_PROFILE_CODE    = "csw-code-"      # + profile name
-KC_PROFILE_DESKTOP = "csw-desktop-"   # + profile name
+KC_PROFILE_CODE    = "csw-code-"
 
 def die(msg):   print(f"❌  {msg}", file=sys.stderr); sys.exit(1)
 def info(msg):  print(f"➜   {msg}")
@@ -108,11 +106,12 @@ def _derive_key():
 def desktop_get():
     from Crypto.Cipher import AES
 
-    if not COOKIES_DB.exists():
-        die(f"Cookies DB not found: {COOKIES_DB}")
+    cookies_db = DESKTOP_DIR / "Cookies"
+    if not cookies_db.exists():
+        die(f"Cookies DB not found: {cookies_db}")
 
     key = _derive_key()
-    conn = sqlite3.connect(str(COOKIES_DB))
+    conn = sqlite3.connect(str(cookies_db))
     row = conn.execute(
         "SELECT encrypted_value FROM cookies WHERE name='sessionKey'"
     ).fetchone()
@@ -132,23 +131,6 @@ def desktop_get():
         die("Claude Desktop: could not find token in decrypted cookie")
     return dec[idx:]
 
-def desktop_set(token):
-    from Crypto.Cipher import AES
-
-    key  = _derive_key()
-    iv   = b" " * 16
-    data = token.encode("utf-8")
-    pad  = 16 - (len(data) % 16)
-    data += bytes([pad] * pad)
-    enc  = b"v10" + AES.new(key, AES.MODE_CBC, IV=iv).encrypt(data)
-
-    conn = sqlite3.connect(str(COOKIES_DB))
-    conn.execute(
-        "UPDATE cookies SET encrypted_value=? WHERE name='sessionKey'", (enc,)
-    )
-    conn.commit()
-    conn.close()
-
 def desktop_running():
     r = subprocess.run(["pgrep", "-x", "Claude"], capture_output=True)
     return r.returncode == 0
@@ -156,8 +138,8 @@ def desktop_running():
 def desktop_quit():
     if desktop_running():
         info("Quitting Claude Desktop...")
-        subprocess.run(["osascript", "-e", 'quit app "Claude"'], capture_output=True)
-        time.sleep(1)
+        subprocess.run(["pkill", "-9", "-x", "Claude"], capture_output=True)
+        time.sleep(3)
 
 def desktop_open():
     info("Reopening Claude Desktop...")
@@ -178,10 +160,20 @@ def _profile_json(name):
 def _profile_dir(name):
     return Path.home() / f".claude.{name}"
 
+def _desktop_profile_dir(name):
+    return DESKTOP_DIR.parent / f"Claude.{name}"
+
+def _migrate_desktop(name):
+    d_dir = _desktop_profile_dir(name)
+    if not DESKTOP_DIR.is_symlink() and DESKTOP_DIR.exists() and not d_dir.exists():
+        info(f"Migrating Claude Desktop data → Claude.{name}/")
+        shutil.move(str(DESKTOP_DIR), str(d_dir))
+        DESKTOP_DIR.symlink_to(d_dir)
+
 def _migrate_to_profile(name):
-    """First-time setup: rename real ~/.claude.json and ~/.claude/ to profile-specific paths and symlink them."""
     p_json = _profile_json(name)
     p_dir  = _profile_dir(name)
+    d_dir  = _desktop_profile_dir(name)
 
     if not CLAUDE_JSON.is_symlink() and CLAUDE_JSON.exists():
         info(f"Migrating ~/.claude.json → .claude.{name}.json")
@@ -193,22 +185,30 @@ def _migrate_to_profile(name):
         shutil.move(str(CLAUDE_DIR), str(p_dir))
         CLAUDE_DIR.symlink_to(p_dir)
 
+    _migrate_desktop(name)
+
+def _switch_link(link, target):
+    if not target.exists():
+        target.mkdir(parents=True)
+    if link.is_symlink():
+        link.unlink()
+    elif link.exists():
+        die(f"{link} exists and is not a symlink. Run '{PREF_CMD} save <name>' first to migrate.")
+    link.symlink_to(target)
+
 def _switch_links(name):
-    """Point ~/.claude.json and ~/.claude/ symlinks at the given profile."""
     p_json = _profile_json(name)
     p_dir  = _profile_dir(name)
+    d_dir  = _desktop_profile_dir(name)
 
     if not p_json.exists():
         die(f"Profile config not found: {p_json}\nRun: {PREF_CMD} new {name}")
     if not p_dir.exists():
         die(f"Profile dir not found: {p_dir}\nRun: {PREF_CMD} new {name}")
 
-    for link, target in [(CLAUDE_JSON, p_json), (CLAUDE_DIR, p_dir)]:
-        if link.is_symlink():
-            link.unlink()
-        elif link.exists():
-            die(f"{link} exists and is not a symlink. Run '{PREF_CMD} save <name>' first to migrate.")
-        link.symlink_to(target)
+    _switch_link(CLAUDE_JSON, p_json)
+    _switch_link(CLAUDE_DIR,  p_dir)
+    _switch_link(DESKTOP_DIR, d_dir)
 
 def _current_profile_name():
     """Return the name of the currently active profile, or None if not managed."""
@@ -241,9 +241,12 @@ def cmd_new(name):
 
     _ensure_current_saved()
 
+    desktop_quit()
+
     p_json.write_text("{}")
     p_json.chmod(0o600)
     p_dir.mkdir()
+    _desktop_profile_dir(name).mkdir(parents=True)
 
     keychain_delete(KEYCHAIN_CODE)
 
@@ -265,22 +268,10 @@ def cmd_save(name):
 
     _migrate_to_profile(name)
 
-    d_token = None
-    try:
-        info("Reading Claude Desktop session...")
-        d_token = desktop_get()
-    except SystemExit:
-        info("Claude Desktop not available — skipping.")
-
-    if not c_token and not d_token:
-        die("No active session found for Code or Desktop. Nothing to save.")
-
     if c_token:
         keychain_set(KC_PROFILE_CODE + name, c_acct, c_token)
-    if d_token:
-        keychain_set(KC_PROFILE_DESKTOP + name, "desktop", d_token)
 
-    ok(f"Profile '{name}' saved (tokens stored in Keychain)")
+    ok(f"Profile '{name}' saved")
 
 def cmd_switch(name):
     p_json = _profile_json(name)
@@ -289,17 +280,20 @@ def cmd_switch(name):
 
     c_token = keychain_get(KC_PROFILE_CODE + name)
     c_acct  = keychain_get_acct(KC_PROFILE_CODE + name)
-    d_token = keychain_get(KC_PROFILE_DESKTOP + name)
+
+    desktop_quit()
+
+    current = _current_profile_name()
+    if current and not DESKTOP_DIR.is_symlink() and DESKTOP_DIR.exists():
+        _migrate_desktop(current)
 
     if c_token:
         info(f"Switching Claude Code → {name}")
         code_set(c_token, c_acct)
+
     _switch_links(name)
 
-    if d_token:
-        info(f"Switching Claude Desktop → {name}")
-        desktop_quit()
-        desktop_set(d_token)
+    if _desktop_profile_dir(name).exists():
         desktop_open()
 
     ok(f"Switched to '{name}'")
@@ -316,25 +310,26 @@ def cmd_delete(name=None):
 
     p_json = _profile_json(name)
     p_dir  = _profile_dir(name)
+    d_dir  = _desktop_profile_dir(name)
 
     if not p_json.exists() and not p_dir.exists():
         die(f"Profile '{name}' not found")
 
-    # If this profile is currently active, remove keychain + symlinks
     if CLAUDE_JSON.is_symlink() and CLAUDE_JSON.resolve() == p_json.resolve():
+        desktop_quit()
         keychain_delete(KEYCHAIN_CODE)
-        for link in (CLAUDE_JSON, CLAUDE_DIR):
+        for link in (CLAUDE_JSON, CLAUDE_DIR, DESKTOP_DIR):
             if link.is_symlink():
                 link.unlink()
 
-    # Remove profile keychain entries
     keychain_delete(KC_PROFILE_CODE + name)
-    keychain_delete(KC_PROFILE_DESKTOP + name)
 
     if p_json.exists():
         p_json.unlink()
     if p_dir.exists():
         shutil.rmtree(str(p_dir))
+    if d_dir.exists():
+        shutil.rmtree(str(d_dir))
 
     ok(f"Profile '{name}' deleted")
 
@@ -342,13 +337,12 @@ def cmd_logout_all():
     info("Removing Claude Code keychain entry...")
     keychain_delete(KEYCHAIN_CODE)
 
-    for link in (CLAUDE_JSON, CLAUDE_DIR):
+    desktop_quit()
+
+    for link in (CLAUDE_JSON, CLAUDE_DIR, DESKTOP_DIR):
         if link.is_symlink():
             info(f"Removing symlink {link}")
             link.unlink()
-
-    info("Quitting Claude Desktop...")
-    desktop_quit()
 
     ok("Logged out of all accounts. Symlinks removed.")
 
