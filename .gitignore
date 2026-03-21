@@ -1,0 +1,4 @@
+.claude-switch/
+__pycache__/
+*.pyc
+.DS_Store
