@@ -8,7 +8,7 @@ Swap between Claude accounts (Code + Desktop) on macOS with a single command.
 
 - macOS
 - [uv](https://astral.sh/uv)
-- `sk` or `fzf` for the interactive picker
+- [sk](https://github.com/lotabout/skim) or [fzf](https://github.com/junegunn/fzf) for the interactive picker
 
 ```bash
 brew install uv sk
