@@ -194,12 +194,38 @@ def _desktop_profile_dir(name):
     return DESKTOP_DIR.parent / f"Claude.{name}"
 
 
-def _migrate_desktop(name):
-    d_dir = _desktop_profile_dir(name)
-    if not DESKTOP_DIR.is_symlink() and DESKTOP_DIR.exists() and not d_dir.exists():
-        info(f"Migrating Claude Desktop data → Claude.{name}/")
-        shutil.move(str(DESKTOP_DIR), str(d_dir))
-        DESKTOP_DIR.symlink_to(d_dir)
+def _migrate_desktop():
+    """Convert legacy Desktop symlink back to a real directory.
+
+    Old csw used symlinks (Claude/ → Claude.name/). New csw uses renames.
+    If we find a symlink, dissolve it so Claude/ is a real dir again.
+    The actual Claude/ → Claude.name/ rename happens on the next `csw use`.
+    """
+    if DESKTOP_DIR.is_symlink():
+        real = DESKTOP_DIR.resolve()
+        DESKTOP_DIR.unlink()
+        if real.exists() and not DESKTOP_DIR.exists():
+            real.rename(DESKTOP_DIR)
+
+
+def _desktop_swap(current_name, to_name):
+    """Swap Desktop dirs by renaming: Claude/ → Claude.current/ and Claude.to/ → Claude/."""
+    d_to = _desktop_profile_dir(to_name)
+
+    # Save current Claude/ → Claude.current_name/
+    if DESKTOP_DIR.is_symlink():
+        DESKTOP_DIR.unlink()  # legacy symlink, real data already at Claude.current_name/
+    elif DESKTOP_DIR.exists() and current_name:
+        d_from = _desktop_profile_dir(current_name)
+        if d_from.exists():
+            shutil.rmtree(str(d_from))
+        DESKTOP_DIR.rename(d_from)
+
+    # Activate Claude.to_name/ → Claude/
+    if d_to.exists():
+        d_to.rename(DESKTOP_DIR)
+    else:
+        DESKTOP_DIR.mkdir(parents=True)
 
 
 def _migrate_to_profile(name):
@@ -216,7 +242,7 @@ def _migrate_to_profile(name):
         shutil.move(str(CLAUDE_DIR), str(p_dir))
         CLAUDE_DIR.symlink_to(p_dir)
 
-    _migrate_desktop(name)
+    _migrate_desktop()
 
 
 def _switch_link(link, target, ensure_dir=False):
@@ -237,7 +263,6 @@ def _switch_link(link, target, ensure_dir=False):
 def _switch_links(name):
     p_json = _profile_json(name)
     p_dir = _profile_dir(name)
-    d_dir = _desktop_profile_dir(name)
 
     if not p_json.exists():
         die(f"Profile config not found: {p_json}\nRun: {PREF_CMD} new {name}")
@@ -246,7 +271,6 @@ def _switch_links(name):
 
     _switch_link(CLAUDE_JSON, p_json)
     _switch_link(CLAUDE_DIR, p_dir, ensure_dir=True)
-    _switch_link(DESKTOP_DIR, d_dir, ensure_dir=True)
 
 
 def _current_profile_name():
@@ -291,11 +315,12 @@ def cmd_new(name):
     p_json.write_text("{}")
     p_json.chmod(0o600)
     p_dir.mkdir()
-    _desktop_profile_dir(name).mkdir(parents=True)
 
     keychain_delete(KEYCHAIN_CODE)
 
+    current = _current_profile_name()
     _switch_links(name)
+    _desktop_swap(current, name)
     ok(f"Profile '{name}' created and activated.")
     info(
         f"""Now run: `claude auth login` and/or login on Claude Desktop
@@ -321,7 +346,7 @@ def cmd_save(name):
     ok(f"Profile '{name}' saved")
 
 
-def cmd_switch(name):
+def cmd_use(name):
     p_json = _profile_json(name)
     if not p_json.exists():
         die(f"Profile '{name}' not found. Use: {PREF_CMD} save {name}")
@@ -332,9 +357,6 @@ def cmd_switch(name):
     desktop_quit()
 
     current = _current_profile_name()
-    if current and not DESKTOP_DIR.is_symlink() and DESKTOP_DIR.exists():
-        _migrate_desktop(current)
-
     has_desktop = _desktop_profile_dir(name).exists() and any(
         _desktop_profile_dir(name).iterdir()
     )
@@ -344,6 +366,7 @@ def cmd_switch(name):
         code_set(c_token, c_acct)
 
     _switch_links(name)
+    _desktop_swap(current, name)
 
     if has_desktop:
         desktop_open()
@@ -516,7 +539,7 @@ def cmd_pick():
         die(f"No profiles saved yet. Use: {PREF_CMD} save <n>")
     chosen = fuzzy_pick(profiles)
     if chosen:
-        cmd_switch(chosen)
+        cmd_use(chosen)
 
 
 USAGE = f"""\
@@ -524,20 +547,20 @@ Usage: {PREF_CMD} <command> [profile]
 
 Commands:
   save <n>    Save current sessions (Code + Desktop) as a profile
-  switch <n>  Switch to a saved profile
-  new <n>       Create a new empty profile slot (then: claude auth login)
-  delete <n>    Delete a profile and its config files
-  list          List all saved profiles
-  whoami        Show active session info (Code + Desktop)
-  pick          Interactive profile picker (sk / fzf)
-  logout-all    Log out of all accounts and remove active symlinks
-  update        Pull latest version from git
-  help          Show this help
+  use <n>     Switch to a saved profile
+  new <n>     Create a new empty profile slot (then: claude auth login)
+  delete <n>  Delete a profile and its config files
+  list        List all saved profiles
+  whoami      Show active session info (Code + Desktop)
+  pick        Interactive profile picker (sk / fzf)
+  logout-all  Log out of all accounts and remove active symlinks
+  update      Pull latest version from git
+  help        Show this help
 
 Examples:
   {PREF_CMD} save work
   {PREF_CMD} new personal   # then: claude auth login, {PREF_CMD} save personal
-  {PREF_CMD} switch work
+  {PREF_CMD} use work
   {PREF_CMD} pick
 """
 
@@ -551,10 +574,15 @@ def main():
             if len(args) < 2:
                 die(f"Usage: {PREF_CMD} save <n>")
             cmd_save(args[1])
-        case "switch":
+        case "use":
             if len(args) < 2:
-                die(f"Usage: {PREF_CMD} switch <n>")
-            cmd_switch(args[1])
+                die(f"Usage: {PREF_CMD} use <n>")
+            cmd_use(args[1])
+        case "switch":
+            info("'switch' is deprecated, use 'use' instead")
+            if len(args) < 2:
+                die(f"Usage: {PREF_CMD} use <n>")
+            cmd_use(args[1])
         case "new":
             if len(args) < 2:
                 die(f"Usage: {PREF_CMD} new <n>")
