@@ -351,12 +351,16 @@ def cmd_use(name):
     if not p_json.exists():
         die(f"Profile '{name}' not found. Use: {PREF_CMD} save {name}")
 
+    current = _current_profile_name()
+    if current and current != name:
+        info(f"Auto-saving current profile '{current}' before switching...")
+        cmd_save(current)
+
     c_token = keychain_get(KC_PROFILE_CODE + name)
     c_acct = keychain_get_acct(KC_PROFILE_CODE + name)
 
     desktop_quit()
 
-    current = _current_profile_name()
     has_desktop = _desktop_profile_dir(name).exists() and any(
         _desktop_profile_dir(name).iterdir()
     )
