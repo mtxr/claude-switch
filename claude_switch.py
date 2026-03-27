@@ -532,7 +532,9 @@ def cmd_whoami():
 
 def cmd_update():
     repo = Path(__file__).parent
-    r = subprocess.run(["git", "-C", str(repo), "pull", "--rebase"], text=True)
+    r = subprocess.run(
+        ["git", "-C", str(repo), "pull", "--rebase", "origin", "main"], text=True
+    )
     if r.returncode != 0:
         die("Update failed. Check your git status.")
 
