@@ -1,59 +1,60 @@
 #!/usr/bin/env bash
-# install.sh — installs claude-switch to ~/.local/bin
+# install.sh — download and install the latest csw binary from GitHub releases
 set -euo pipefail
 
+REPO="mtxr/claude-switch"
 BIN_DIR="$HOME/.local/bin"
-REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TARGET="$BIN_DIR/claude-switch"
-TARGET_ALIAS="$BIN_DIR/csw"
+BINARY="csw"
+ALIAS="claude-switch"
 
-# Check uv
-if ! command -v uv &>/dev/null; then
-  echo "❌  uv not found."
-  echo ""
-  echo "    Install it first:"
-  echo "      curl -LsSf https://astral.sh/uv/install.sh | sh"
-  echo "    or:"
-  echo "      brew install uv"
+# Detect architecture
+ARCH=$(uname -m)
+case "$ARCH" in
+  arm64 | aarch64) ARCH="aarch64" ;;
+  x86_64) ARCH="x86_64" ;;
+  *)
+    echo "❌  Unsupported architecture: $ARCH"
+    exit 1
+    ;;
+esac
+
+# Get latest release tag
+echo "➜   Fetching latest release..."
+LATEST=$(curl -s -H "Accept: application/vnd.github+json" \
+  "https://api.github.com/repos/${REPO}/releases/latest" |
+  grep '"tag_name"' | sed 's/.*"v\([^"]*\)".*/\1/')
+
+if [ -z "$LATEST" ]; then
+  echo "❌  Could not determine latest release."
+  echo "    Check: https://github.com/${REPO}/releases"
   exit 1
 fi
+
+URL="https://github.com/${REPO}/releases/download/v${LATEST}/${BINARY}-${ARCH}-apple-darwin"
 
 mkdir -p "$BIN_DIR"
 
-# Write wrapper inline so REPO_DIR is baked in at install time
-cat > "$TARGET" <<EOF
-#!/usr/bin/env bash
-set -euo pipefail
+echo "➜   Downloading csw v${LATEST} for ${ARCH}..."
+curl -L --fail -o "${BIN_DIR}/${BINARY}" "$URL"
+chmod +x "${BIN_DIR}/${BINARY}"
 
-if ! command -v uv &>/dev/null; then
-  echo "❌  uv not found."
-  echo "    Install: curl -LsSf https://astral.sh/uv/install.sh | sh"
-  exit 1
-fi
-
-exec uv run "${REPO_DIR}/claude_switch.py" "\$@"
-EOF
-
-ln -sf "$TARGET" "$TARGET_ALIAS"
-
-chmod +x "$TARGET"
-chmod +x "$TARGET_ALIAS"
+# Create claude-switch alias
+ln -sf "${BIN_DIR}/${BINARY}" "${BIN_DIR}/${ALIAS}"
 
 # Ensure BIN_DIR is in PATH
 if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
   echo ""
   echo "⚠️   $BIN_DIR is not in your PATH."
-  echo "    Add this to your ~/.zshrc:"
+  echo "    Add this to your ~/.zshrc or ~/.zprofile:"
   echo ""
   echo "      export PATH=\"\$HOME/.local/bin:\$PATH\""
   echo ""
 fi
 
-echo "✅  Installed → $TARGET"
-echo "    Aliased → $TARGET_ALIAS"
-echo "    Pointing to: ${REPO_DIR}/claude_switch.py"
+echo "✅  csw v${LATEST} installed to ${BIN_DIR}/${BINARY}"
+echo "    Alias: ${BIN_DIR}/${ALIAS}"
 echo ""
 echo "Usage:"
-echo "  claude-switch save work"
-echo "  claude-switch save personal"
-echo "  claude-switch pick"
+echo "  csw save work"
+echo "  csw save personal"
+echo "  csw pick"
