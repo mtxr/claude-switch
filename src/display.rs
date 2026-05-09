@@ -51,3 +51,61 @@ pub fn fmt_scopes(scopes: &[serde_json::Value]) -> String {
         parts.join(", ")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+    use serde_json::json;
+
+    #[test]
+    fn fmt_expiry_zero_returns_question_mark() {
+        assert_eq!(fmt_expiry(0), "?");
+    }
+
+    #[test]
+    fn fmt_expiry_past_shows_expired() {
+        // 1 hour ago
+        let past_ms = (Utc::now().timestamp() - 3600) * 1000;
+        assert!(fmt_expiry(past_ms).contains("EXPIRED"));
+    }
+
+    #[test]
+    fn fmt_expiry_within_24h_shows_hours() {
+        // 12 hours from now
+        let soon_ms = (Utc::now().timestamp() + 12 * 3600) * 1000;
+        let result = fmt_expiry(soon_ms);
+        assert!(result.contains("h remaining"), "got: {}", result);
+    }
+
+    #[test]
+    fn fmt_expiry_beyond_24h_shows_days() {
+        // 3 days from now
+        let future_ms = (Utc::now().timestamp() + 3 * 24 * 3600) * 1000;
+        let result = fmt_expiry(future_ms);
+        assert!(result.contains("d remaining"), "got: {}", result);
+    }
+
+    #[test]
+    fn fmt_scopes_empty_returns_question_mark() {
+        assert_eq!(fmt_scopes(&[]), "?");
+    }
+
+    #[test]
+    fn fmt_scopes_strips_user_prefix() {
+        let scopes = vec![json!("user:inference"), json!("user:profile")];
+        assert_eq!(fmt_scopes(&scopes), "inference, profile");
+    }
+
+    #[test]
+    fn fmt_scopes_no_prefix_left_unchanged() {
+        let scopes = vec![json!("mcp_servers"), json!("file_upload")];
+        assert_eq!(fmt_scopes(&scopes), "mcp_servers, file_upload");
+    }
+
+    #[test]
+    fn fmt_scopes_ignores_non_string_values() {
+        let scopes = vec![json!("user:inference"), json!(42), json!(null)];
+        assert_eq!(fmt_scopes(&scopes), "inference");
+    }
+}
