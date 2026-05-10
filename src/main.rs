@@ -125,7 +125,7 @@ fn cmd_whoami() -> Result<()> {
 }
 
 fn print_code_session(oauth: serde_json::Value) {
-    let acct = read_active_account();
+    let acct = read_active_account_at(&paths::claude_json());
     let email = acct.get("emailAddress").and_then(|v| v.as_str()).unwrap_or("?");
     let org = acct.get("organizationName").and_then(|v| v.as_str()).unwrap_or("");
 
@@ -145,13 +145,75 @@ fn print_code_session(oauth: serde_json::Value) {
     display::row("Token", &format!("{}...", &token[..token.len().min(15)]));
 }
 
-fn read_active_account() -> serde_json::Value {
-    let path = paths::claude_json();
+fn read_active_account_at(path: &std::path::Path) -> serde_json::Value {
     std::fs::read_to_string(path)
         .ok()
         .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
         .and_then(|v| v.get("oauthAccount").cloned())
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn setup() -> TempDir {
+        tempfile::tempdir().unwrap()
+    }
+
+    #[test]
+    fn read_active_account_returns_empty_when_file_missing() {
+        let tmp = setup();
+        let result = read_active_account_at(&tmp.path().join(".claude.json"));
+        assert_eq!(result, serde_json::Value::Null);
+    }
+
+    #[test]
+    fn read_active_account_parses_email_and_org() {
+        let tmp = setup();
+        let path = tmp.path().join(".claude.json");
+        std::fs::write(
+            &path,
+            r#"{"oauthAccount":{"emailAddress":"me@co.com","organizationName":"Acme"}}"#,
+        )
+        .unwrap();
+        let acct = read_active_account_at(&path);
+        assert_eq!(acct["emailAddress"], "me@co.com");
+        assert_eq!(acct["organizationName"], "Acme");
+    }
+
+    #[test]
+    fn read_active_account_returns_empty_on_invalid_json() {
+        let tmp = setup();
+        let path = tmp.path().join(".claude.json");
+        std::fs::write(&path, b"not json").unwrap();
+        assert_eq!(read_active_account_at(&path), serde_json::Value::Null);
+    }
+
+    #[test]
+    fn read_active_account_returns_empty_when_field_absent() {
+        let tmp = setup();
+        let path = tmp.path().join(".claude.json");
+        std::fs::write(&path, r#"{"other":"value"}"#).unwrap();
+        assert_eq!(read_active_account_at(&path), serde_json::Value::Null);
+    }
+
+    #[test]
+    fn oauth_token_preview_truncated_to_15() {
+        // Verify the token display logic used in print_code_session
+        let token = "sk-ant-oat01-ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+        let preview = format!("{}...", &token[..token.len().min(15)]);
+        assert_eq!(preview, "sk-ant-oat01-AB...");
+        assert_eq!(preview.len(), 18); // 15 + 3
+    }
+
+    #[test]
+    fn oauth_token_shorter_than_15_does_not_panic() {
+        let token = "short";
+        let preview = format!("{}...", &token[..token.len().min(15)]);
+        assert_eq!(preview, "short...");
+    }
 }
 
 fn cmd_update() -> Result<()> {

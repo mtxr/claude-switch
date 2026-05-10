@@ -50,3 +50,74 @@ pub fn delete(service: &str) -> Result<()> {
         .output()?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Unique service name per test run to avoid cross-run interference.
+    fn svc(name: &str) -> String {
+        format!("csw-test-{}-{}", std::process::id(), name)
+    }
+
+    fn cleanup(service: &str) {
+        let _ = delete(service);
+    }
+
+    #[test]
+    fn get_missing_returns_error() {
+        let s = svc("missing");
+        cleanup(&s);
+        assert!(get(&s).is_err());
+    }
+
+    #[test]
+    fn set_and_get_roundtrip() {
+        let s = svc("roundtrip");
+        cleanup(&s);
+        set(&s, "testuser", "secret-value").unwrap();
+        assert_eq!(get(&s).unwrap(), "secret-value");
+        cleanup(&s);
+    }
+
+    #[test]
+    fn set_overwrites_existing_entry() {
+        let s = svc("overwrite");
+        cleanup(&s);
+        set(&s, "user", "first").unwrap();
+        set(&s, "user", "second").unwrap();
+        assert_eq!(get(&s).unwrap(), "second");
+        cleanup(&s);
+    }
+
+    #[test]
+    fn get_account_returns_stored_account() {
+        let s = svc("account");
+        cleanup(&s);
+        set(&s, "hello@example.com", "value").unwrap();
+        assert_eq!(get_account(&s), "hello@example.com");
+        cleanup(&s);
+    }
+
+    #[test]
+    fn get_account_returns_user_when_missing() {
+        let s = svc("no-acct");
+        cleanup(&s);
+        assert_eq!(get_account(&s), "user");
+    }
+
+    #[test]
+    fn delete_removes_entry() {
+        let s = svc("delete");
+        set(&s, "u", "v").unwrap();
+        delete(&s).unwrap();
+        assert!(get(&s).is_err());
+    }
+
+    #[test]
+    fn delete_nonexistent_does_not_error() {
+        let s = svc("delete-missing");
+        cleanup(&s);
+        assert!(delete(&s).is_ok());
+    }
+}
