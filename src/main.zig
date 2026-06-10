@@ -21,7 +21,7 @@ const KEYCHAIN_CODE = "Claude Code-credentials";
 const KC_PROFILE_CODE = "csw-code-";
 const GITHUB_REPO = "mtxr/claude-switch";
 const VERSION = "0.2.0";
-const UPDATE_CACHE_FILE = ".csw-update-cache";
+const UPDATE_CACHE_FILE = "/tmp/csw-update-cache";
 const UPDATE_CHECK_INTERVAL_S = 86400; // 24h
 
 pub fn main(init: std.process.Init) !void {
@@ -62,42 +62,40 @@ fn isNewerVersion(candidate: []const u8, current: []const u8) bool {
     return c[2] > cur[2];
 }
 
+fn readUpdateCache(gpa: std.mem.Allocator, cache_path_z: [*:0]const u8) struct { version: ?[]const u8, checked: i64 } {
+    const fd = std.c.open(cache_path_z, .{}, @as(std.c.mode_t, 0));
+    if (fd < 0) return .{ .version = null, .checked = 0 };
+    defer _ = std.c.close(fd);
+    var buf: [256]u8 = undefined;
+    const n = std.c.read(fd, &buf, buf.len);
+    if (n <= 0) return .{ .version = null, .checked = 0 };
+    const parsed = std.json.parseFromSlice(std.json.Value, gpa, buf[0..@intCast(n)], .{}) catch
+        return .{ .version = null, .checked = 0 };
+    defer parsed.deinit();
+    if (parsed.value != .object) return .{ .version = null, .checked = 0 };
+    var checked: i64 = 0;
+    var version: ?[]const u8 = null;
+    if (parsed.value.object.get("checked")) |v| {
+        if (v == .integer) checked = v.integer;
+    }
+    if (parsed.value.object.get("latest")) |v| {
+        if (v == .string) version = gpa.dupe(u8, v.string) catch null;
+    }
+    return .{ .version = version, .checked = checked };
+}
+
 fn checkUpdateSilent(gpa: std.mem.Allocator, io: std.Io) void {
     const c_time = @cImport(@cInclude("time.h"));
     const now: i64 = c_time.time(null);
 
-    const h = paths.home(gpa) catch return;
-    defer gpa.free(h);
-    const cache_path = std.fs.path.join(gpa, &.{ h, UPDATE_CACHE_FILE }) catch return;
-    defer gpa.free(cache_path);
-    const cache_path_z = gpa.dupeZ(u8, cache_path) catch return;
+    const cache_path_z = gpa.dupeZ(u8, UPDATE_CACHE_FILE) catch return;
     defer gpa.free(cache_path_z);
 
-    // Read existing cache
-    var cached_version: ?[]const u8 = null;
-    var last_checked: i64 = 0;
-    defer if (cached_version) |v| gpa.free(v);
+    const cache = readUpdateCache(gpa, cache_path_z);
+    defer if (cache.version) |v| gpa.free(v);
 
-    read_cache: {
-        const fd = std.c.open(cache_path_z, .{}, @as(std.c.mode_t, 0));
-        if (fd < 0) break :read_cache;
-        defer _ = std.c.close(fd);
-        var buf: [256]u8 = undefined;
-        const n = std.c.read(fd, &buf, buf.len);
-        if (n <= 0) break :read_cache;
-        const parsed = std.json.parseFromSlice(std.json.Value, gpa, buf[0..@intCast(n)], .{}) catch break :read_cache;
-        defer parsed.deinit();
-        if (parsed.value != .object) break :read_cache;
-        if (parsed.value.object.get("checked")) |v| {
-            if (v == .integer) last_checked = v.integer;
-        }
-        if (parsed.value.object.get("latest")) |v| {
-            if (v == .string) cached_version = gpa.dupe(u8, v.string) catch null;
-        }
-    }
-
-    // Show notice from cache if available
-    if (cached_version) |latest| {
+    // Show notice from cache instantly — zero network latency
+    if (cache.version) |latest| {
         if (isNewerVersion(latest, VERSION)) {
             const msg = std.fmt.allocPrint(gpa, "Update available: v{s} → v{s}  (run: csw update)", .{ VERSION, latest }) catch return;
             defer gpa.free(msg);
@@ -105,14 +103,37 @@ fn checkUpdateSilent(gpa: std.mem.Allocator, io: std.Io) void {
         }
     }
 
-    // Refresh cache if stale
-    if (now - last_checked < UPDATE_CHECK_INTERVAL_S) return;
+    // If cache is fresh, nothing else to do
+    if (now - cache.checked < UPDATE_CHECK_INTERVAL_S) return;
+
+    // Spawn self as background process to refresh the cache — parent returns immediately
+    var exe_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var size: u32 = @intCast(exe_buf.len);
+    if (std.c._NSGetExecutablePath(&exe_buf, &size) != 0) return;
+    const exe_path = std.mem.sliceTo(&exe_buf, 0);
+
+    _ = std.process.spawn(io, .{
+        .argv = &.{ exe_path, "--check-update-bg" },
+        .stdin = .ignore,
+        .stdout = .ignore,
+        .stderr = .ignore,
+    }) catch return;
+    // Don't wait — child runs in background and writes to cache, parent continues
+}
+
+// Hidden command: fetch latest release from GitHub and write to cache. No output.
+fn cmdCheckUpdateBg(gpa: std.mem.Allocator, io: std.Io) void {
+    const c_time = @cImport(@cInclude("time.h"));
+    const now: i64 = c_time.time(null);
+
+    const cache_path_z = gpa.dupeZ(u8, UPDATE_CACHE_FILE) catch return;
+    defer gpa.free(cache_path_z);
 
     const url = std.fmt.allocPrint(gpa, "https://api.github.com/repos/{s}/releases/latest", .{GITHUB_REPO}) catch return;
     defer gpa.free(url);
 
     const result = std.process.run(gpa, io, .{
-        .argv = &.{ "curl", "-s", "--max-time", "5", "-H", "Accept: application/vnd.github+json", url },
+        .argv = &.{ "curl", "-s", "--max-time", "10", "-H", "Accept: application/vnd.github+json", url },
         .stdout_limit = .limited(64 * 1024),
         .stderr_limit = .limited(256),
     }) catch return;
@@ -125,35 +146,31 @@ fn checkUpdateSilent(gpa: std.mem.Allocator, io: std.Io) void {
     };
     if (!success) return;
 
-    var latest_from_api: []const u8 = VERSION;
-    const parsed_api = std.json.parseFromSlice(std.json.Value, gpa, result.stdout, .{}) catch return;
-    defer parsed_api.deinit();
-    if (parsed_api.value == .object) {
-        if (parsed_api.value.object.get("tag_name")) |v| {
-            if (v == .string) latest_from_api = std.mem.trimStart(u8, v.string, "v");
+    var latest: []const u8 = VERSION;
+    const parsed = std.json.parseFromSlice(std.json.Value, gpa, result.stdout, .{}) catch return;
+    defer parsed.deinit();
+    if (parsed.value == .object) {
+        if (parsed.value.object.get("tag_name")) |v| {
+            if (v == .string) latest = std.mem.trimStart(u8, v.string, "v");
         }
     }
 
-    // Write updated cache
-    write_cache: {
-        const json = std.fmt.allocPrint(gpa, "{{\"checked\":{d},\"latest\":\"{s}\"}}\n", .{ now, latest_from_api }) catch break :write_cache;
-        defer gpa.free(json);
-        const fd = std.c.open(cache_path_z, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, @as(std.c.mode_t, 0o600));
-        if (fd < 0) break :write_cache;
-        defer _ = std.c.close(fd);
-        _ = std.c.write(fd, json.ptr, json.len);
-    }
-
-    // Show notice if this check found a new version (and we hadn't shown one from cache)
-    if (cached_version == null and isNewerVersion(latest_from_api, VERSION)) {
-        const msg = std.fmt.allocPrint(gpa, "Update available: v{s} → v{s}  (run: csw update)", .{ VERSION, latest_from_api }) catch return;
-        defer gpa.free(msg);
-        display.info(msg);
-    }
+    const json = std.fmt.allocPrint(gpa, "{{\"checked\":{d},\"latest\":\"{s}\"}}\n", .{ now, latest }) catch return;
+    defer gpa.free(json);
+    const fd = std.c.open(cache_path_z, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, @as(std.c.mode_t, 0o600));
+    if (fd < 0) return;
+    defer _ = std.c.close(fd);
+    _ = std.c.write(fd, json.ptr, json.len);
 }
 
 fn run(gpa: std.mem.Allocator, io: std.Io, args: []const []const u8) !void {
     const cmd = if (args.len > 0) args[0] else "";
+    // Background worker spawned by checkUpdateSilent — runs silently and exits
+    if (std.mem.eql(u8, cmd, "--check-update-bg")) {
+        cmdCheckUpdateBg(gpa, io);
+        return;
+    }
+
     const skip_check = std.mem.eql(u8, cmd, "update") or
         std.mem.eql(u8, cmd, "--version") or
         std.mem.eql(u8, cmd, "-v");
