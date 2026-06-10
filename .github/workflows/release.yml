@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   build:
-    name: Build ${{ matrix.target }}
+    name: Build ${{ matrix.arch }}
     runs-on: macos-latest
     strategy:
       matrix:
@@ -23,20 +23,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Zig 0.16.0
+        uses: mlugg/setup-zig@v2
         with:
-          targets: ${{ matrix.target }}
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: ${{ matrix.target }}
+          version: "0.16.0"
 
       - name: Build
-        run: cargo build --release --target ${{ matrix.target }}
-
-      - name: Stage binary
         run: |
-          cp target/${{ matrix.target }}/release/csw csw-${{ matrix.arch }}-apple-darwin
+          zig build \
+            -Doptimize=ReleaseSmall \
+            -Dtarget=${{ matrix.target }}
+          strip zig-out/bin/csw
+          cp zig-out/bin/csw csw-${{ matrix.arch }}-apple-darwin
 
       - uses: actions/upload-artifact@v4
         with:

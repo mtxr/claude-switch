@@ -16,12 +16,14 @@ This downloads the latest release binary for your architecture (arm64 or x86_64)
 
 ### Option 2 — build from source
 
-Requires [Rust](https://rustup.rs).
+Requires [Zig 0.16.0](https://ziglang.org/download/) (or install via [mise](https://mise.jdx.dev): `mise use zig@0.16.0`).
 
 ```bash
 git clone https://github.com/mtxr/claude-switch
 cd claude-switch
-cargo install --path .
+zig build -Doptimize=ReleaseSmall
+# binary at: zig-out/bin/csw
+cp zig-out/bin/csw ~/.local/bin/csw
 ```
 
 ### Option 3 — manual download
@@ -150,11 +152,20 @@ Claude Desktop uses real directory renames instead of symlinks (Electron doesn't
 ```bash
 git clone https://github.com/mtxr/claude-switch
 cd claude-switch
-cargo build
-cargo test
+
+# Debug build (fast compile, leak detection)
+zig build
+
+# Optimised builds
+zig build -Doptimize=ReleaseSafe   # bounds checks on, ~670 KB
+zig build -Doptimize=ReleaseSmall  # smallest binary
+zig build -Doptimize=ReleaseFast   # max speed
+
+# Run tests
+zig build test
 ```
 
-CI runs on every push: `cargo clippy` (warnings are errors) and `cargo test`.
+CI runs on every push: `zig build` (debug) and `zig build test`.
 
 Releases are built automatically when a tag is pushed:
 
@@ -163,7 +174,7 @@ git tag v0.2.0
 git push origin --tags
 ```
 
-GitHub Actions compiles arm64 and x86_64 binaries and publishes them to the release.
+GitHub Actions cross-compiles arm64 and x86_64 binaries (`-Doptimize=ReleaseSmall`) and publishes them to the release.
 
 ## License
 

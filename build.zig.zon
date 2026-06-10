@@ -1,0 +1,7 @@
+.{
+    .name = .csw,
+    .version = "0.2.0",
+    .fingerprint = 0x7fa362c1e4e8e0d1,
+    .paths = .{""},
+    .dependencies = .{},
+}
