@@ -238,6 +238,28 @@ pub fn mkdirAllC(gpa: std.mem.Allocator, abs_path: []const u8) !void {
     }
 }
 
+pub fn hasSessionKeyCookie(gpa: std.mem.Allocator, base: []const u8) bool {
+    const desktop_dir = paths.desktopDirIn(gpa, base) catch return false;
+    defer gpa.free(desktop_dir);
+    const cookies_path = std.fs.path.join(gpa, &.{ desktop_dir, "Cookies" }) catch return false;
+    defer gpa.free(cookies_path);
+
+    if (!pathExists(gpa, cookies_path)) return false;
+
+    const db_path_z = gpa.dupeZ(u8, cookies_path) catch return false;
+    defer gpa.free(db_path_z);
+
+    var db: ?*c.sqlite3 = null;
+    if (c.sqlite3_open_v2(db_path_z, &db, c.SQLITE_OPEN_READONLY | c.SQLITE_OPEN_NOMUTEX, null) != c.SQLITE_OK) return false;
+    defer _ = c.sqlite3_close(db);
+
+    var stmt: ?*c.sqlite3_stmt = null;
+    if (c.sqlite3_prepare_v2(db, "SELECT 1 FROM cookies WHERE name='sessionKey' LIMIT 1", -1, &stmt, null) != c.SQLITE_OK) return false;
+    defer _ = c.sqlite3_finalize(stmt);
+
+    return c.sqlite3_step(stmt) == c.SQLITE_ROW;
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 test "hasData false quando dir não existe" {

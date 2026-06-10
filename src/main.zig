@@ -74,6 +74,8 @@ fn run(gpa: std.mem.Allocator, io: std.Io, args: []const []const u8) !void {
         return cmdWhoami(gpa, io);
     } else if (std.mem.eql(u8, cmd, "pick")) {
         return profile.cmdPick(gpa, io);
+    } else if (std.mem.eql(u8, cmd, "doctor")) {
+        return cmdDoctor(gpa, io);
     } else if (std.mem.eql(u8, cmd, "update")) {
         return cmdUpdate(gpa, io);
     } else if (std.mem.eql(u8, cmd, "logout-all")) {
@@ -106,8 +108,147 @@ fn printHelp() void {
         \\  pick             Interactive profile picker (sk / fzf)
         \\  update           Update csw to the latest release
         \\  logout-all       Log out and remove all active symlinks
+        \\  doctor           Check that everything csw needs is in order
         \\
     , .{});
+}
+
+fn doctorOk(label: []const u8, detail: []const u8) void {
+    display.print("\x1b[32m  [ok]  \x1b[0m {s:<32} {s}\n", .{ label, detail });
+}
+fn doctorWarn(label: []const u8, detail: []const u8) void {
+    display.print("\x1b[33m  [warn]\x1b[0m {s:<32} {s}\n", .{ label, detail });
+}
+fn doctorFail(label: []const u8, detail: []const u8) void {
+    display.print("\x1b[31m  [fail]\x1b[0m {s:<32} {s}\n", .{ label, detail });
+}
+
+fn cmdDoctor(gpa: std.mem.Allocator, io: std.Io) !void {
+    display.print("\ncsw doctor\n\n", .{});
+    var issues: usize = 0;
+
+    // ── Claude Desktop ───────────────────────────────────────────────────────
+    display.print("  Claude Desktop\n  ──────────────────────────────────\n", .{});
+
+    const app_exists = desktop.pathExists(gpa, "/Applications/Claude.app");
+    if (app_exists) {
+        doctorOk("Claude.app", "/Applications/Claude.app");
+    } else {
+        doctorFail("Claude.app", "not found — install from https://claude.ai/download");
+        issues += 1;
+    }
+
+    const running = desktop.isRunning(gpa, io);
+    if (running) {
+        doctorOk("Process", "running");
+    } else {
+        doctorWarn("Process", "not running");
+    }
+
+    // ── Keychain ─────────────────────────────────────────────────────────────
+    display.print("\n  Keychain\n  ──────────────────────────────────\n", .{});
+
+    if (keychain.get(gpa, io, "Claude Safe Storage")) |v| {
+        gpa.free(v);
+        doctorOk("Claude Safe Storage", "found");
+    } else |_| {
+        doctorFail("Claude Safe Storage", "missing — open Claude Desktop to create it");
+        issues += 1;
+    }
+
+    if (keychain.get(gpa, io, KEYCHAIN_CODE)) |v| {
+        gpa.free(v);
+        doctorOk("Claude Code-credentials", "found");
+    } else |_| {
+        doctorWarn("Claude Code-credentials", "missing — run: claude auth login");
+    }
+
+    // ── Filesystem ───────────────────────────────────────────────────────────
+    display.print("\n  Data\n  ──────────────────────────────────\n", .{});
+
+    const h = try paths.home(gpa);
+    defer gpa.free(h);
+
+    const desktop_dir = try paths.desktopDirIn(gpa, h);
+    defer gpa.free(desktop_dir);
+    if (desktop.pathExists(gpa, desktop_dir)) {
+        doctorOk("Desktop data dir", "~/Library/Application Support/Claude/");
+    } else {
+        doctorFail("Desktop data dir", "missing — Claude Desktop has never run?");
+        issues += 1;
+    }
+
+    const cookies_path = try std.fs.path.join(gpa, &.{ desktop_dir, "Cookies" });
+    defer gpa.free(cookies_path);
+    if (desktop.pathExists(gpa, cookies_path)) {
+        doctorOk("Cookies DB", "found");
+    } else {
+        doctorFail("Cookies DB", "missing");
+        issues += 1;
+    }
+
+    if (desktop.hasSessionKeyCookie(gpa, h)) {
+        doctorOk("sessionKey cookie", "found (legacy token auth)");
+    } else {
+        doctorWarn("sessionKey cookie", "absent — Desktop likely uses OAuth now (save/use still work)");
+    }
+
+    // ── Profiles ─────────────────────────────────────────────────────────────
+    display.print("\n  Profiles\n  ──────────────────────────────────\n", .{});
+
+    const active = try profile.current(gpa);
+    defer if (active) |a| gpa.free(a);
+    if (active) |a| {
+        doctorOk("Active profile", a);
+    } else {
+        doctorWarn("Active profile", "none — run: csw save <name>");
+    }
+
+    const profiles = try profile.list(gpa);
+    defer {
+        for (profiles) |p| gpa.free(p);
+        gpa.free(profiles);
+    }
+    if (profiles.len > 0) {
+        const list_str = try std.mem.join(gpa, ", ", profiles);
+        defer gpa.free(list_str);
+        doctorOk("Saved profiles", list_str);
+    } else {
+        doctorWarn("Saved profiles", "none");
+    }
+
+    // ── Tools ────────────────────────────────────────────────────────────────
+    display.print("\n  Tools\n  ──────────────────────────────────\n", .{});
+
+    var found_picker = false;
+    for (&[_][]const u8{ "sk", "fzf" }) |cmd| {
+        const result = std.process.run(gpa, io, .{
+            .argv = &.{ "which", cmd },
+            .stdout_limit = .limited(256),
+            .stderr_limit = .limited(256),
+        }) catch continue;
+        defer gpa.free(result.stdout);
+        defer gpa.free(result.stderr);
+        if (result.term == .exited and result.term.exited == 0) {
+            doctorOk("Fuzzy picker", cmd);
+            found_picker = true;
+            break;
+        }
+    }
+    if (!found_picker) {
+        doctorWarn("Fuzzy picker", "sk/fzf not found — install: brew install sk");
+    }
+
+    // ── Summary ──────────────────────────────────────────────────────────────
+    display.print("\n", .{});
+    if (issues == 0) {
+        display.ok("All checks passed.");
+    } else {
+        const msg = try std.fmt.allocPrint(gpa, "{d} issue(s) found — see [fail] lines above.", .{issues});
+        defer gpa.free(msg);
+        display.err(msg);
+        return error.DoctorFailed;
+    }
 }
 
 fn cmdWhoami(gpa: std.mem.Allocator, io: std.Io) !void {

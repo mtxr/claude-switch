@@ -76,8 +76,8 @@ pub fn cmdUse(gpa: std.mem.Allocator, io: std.Io, name: []const u8) !void {
     }
 
     const cur = try currentIn(gpa, h);
+    defer if (cur) |cur_owned| gpa.free(cur_owned);
     if (cur) |c_name| {
-        defer gpa.free(c_name);
         if (!std.mem.eql(u8, c_name, name)) {
             const msg = try std.fmt.allocPrint(gpa, "Auto-saving current profile '{s}' before switching...", .{c_name});
             defer gpa.free(msg);
