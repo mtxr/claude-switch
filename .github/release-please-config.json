@@ -3,7 +3,6 @@
   "release-type": "simple",
   "packages": {
     ".": {
-      "component": "csw",
       "extra-files": [
         {
           "type": "generic",
