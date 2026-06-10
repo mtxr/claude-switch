@@ -266,7 +266,9 @@ test "hasData false quando dir não existe" {
     const alloc = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const base = try tmp.dir.realpathAlloc(alloc, ".");
+    var base_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const base_len = try tmp.dir.realPath(std.Options.debug_io, &base_buf);
+    const base = try alloc.dupe(u8, base_buf[0..base_len]);
     defer alloc.free(base);
     try std.testing.expect(!hasDataIn(alloc, base, "work"));
 }
@@ -275,7 +277,9 @@ test "hasData true quando dir tem arquivos" {
     const alloc = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const base = try tmp.dir.realpathAlloc(alloc, ".");
+    var base_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const base_len = try tmp.dir.realPath(std.Options.debug_io, &base_buf);
+    const base = try alloc.dupe(u8, base_buf[0..base_len]);
     defer alloc.free(base);
 
     const dir_path = try paths.desktopProfileDirIn(alloc, base, "work");
@@ -286,7 +290,7 @@ test "hasData true quando dir tem arquivos" {
     defer alloc.free(file_path);
     const fp_z = try alloc.dupeZ(u8, file_path);
     defer alloc.free(fp_z);
-    const fd = std.c.open(fp_z, std.c.O.CREAT | std.c.O.WRONLY, @as(std.c.mode_t, 0o644));
+    const fd = std.c.open(fp_z, .{ .ACCMODE = .WRONLY, .CREAT = true }, @as(std.c.mode_t, 0o644));
     if (fd >= 0) _ = std.c.close(fd);
 
     try std.testing.expect(hasDataIn(alloc, base, "work"));
@@ -296,7 +300,9 @@ test "swap move dirs corretamente" {
     const alloc = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const base = try tmp.dir.realpathAlloc(alloc, ".");
+    var base_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const base_len = try tmp.dir.realPath(std.Options.debug_io, &base_buf);
+    const base = try alloc.dupe(u8, base_buf[0..base_len]);
     defer alloc.free(base);
 
     const dd = try paths.desktopDirIn(alloc, base);
@@ -311,7 +317,7 @@ test "swap move dirs corretamente" {
     defer alloc.free(marker_path);
     const mp_z = try alloc.dupeZ(u8, marker_path);
     defer alloc.free(mp_z);
-    const fd = std.c.open(mp_z, std.c.O.CREAT | std.c.O.WRONLY, @as(std.c.mode_t, 0o644));
+    const fd = std.c.open(mp_z, .{ .ACCMODE = .WRONLY, .CREAT = true }, @as(std.c.mode_t, 0o644));
     if (fd >= 0) _ = std.c.close(fd);
 
     try mkdirAllC(alloc, d_personal);
@@ -319,7 +325,7 @@ test "swap move dirs corretamente" {
     defer alloc.free(pfile_path);
     const pp_z = try alloc.dupeZ(u8, pfile_path);
     defer alloc.free(pp_z);
-    const fd2 = std.c.open(pp_z, std.c.O.CREAT | std.c.O.WRONLY, @as(std.c.mode_t, 0o644));
+    const fd2 = std.c.open(pp_z, .{ .ACCMODE = .WRONLY, .CREAT = true }, @as(std.c.mode_t, 0o644));
     if (fd2 >= 0) _ = std.c.close(fd2);
 
     try swapIn(alloc, base, "work", "personal");
@@ -337,7 +343,9 @@ test "getSessionKey decripta cookie" {
     const alloc = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const base = try tmp.dir.realpathAlloc(alloc, ".");
+    var base_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const base_len = try tmp.dir.realPath(std.Options.debug_io, &base_buf);
+    const base = try alloc.dupe(u8, base_buf[0..base_len]);
     defer alloc.free(base);
 
     const raw_key = "test_storage_key";
@@ -353,7 +361,9 @@ test "getSessionKey encontra sk-ant no meio de ruído" {
     const alloc = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const base = try tmp.dir.realpathAlloc(alloc, ".");
+    var base_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const base_len = try tmp.dir.realPath(std.Options.debug_io, &base_buf);
+    const base = try alloc.dupe(u8, base_buf[0..base_len]);
     defer alloc.free(base);
 
     try makeCookiesDb(alloc, base, "key", "\x00\x01noise\x00sk-ant-sid01-real-token");
@@ -366,7 +376,9 @@ test "getSessionKey falha quando DB não existe" {
     const alloc = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const base = try tmp.dir.realpathAlloc(alloc, ".");
+    var base_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const base_len = try tmp.dir.realPath(std.Options.debug_io, &base_buf);
+    const base = try alloc.dupe(u8, base_buf[0..base_len]);
     defer alloc.free(base);
     try std.testing.expectError(error.CookiesDbNotFound, getSessionKeyWithKeyIn(alloc, base, "key"));
 }

@@ -83,7 +83,9 @@ pub fn delete(gpa: std.mem.Allocator, io: std.Io, service: []const u8) !void {
 
 test "get em serviço inexistente retorna erro" {
     const alloc = std.testing.allocator;
-    const io = std.Options.debug_io;
+    var tio = std.Io.Threaded.init(std.heap.page_allocator, .{});
+    defer tio.deinit();
+    const io = tio.io();
     const svc = try std.fmt.allocPrint(alloc, "csw-test-{d}-missing", .{@as(i64, c_time.time(null))});
     defer alloc.free(svc);
     delete(alloc, io, svc) catch {};
@@ -92,7 +94,9 @@ test "get em serviço inexistente retorna erro" {
 
 test "set e get round-trip" {
     const alloc = std.testing.allocator;
-    const io = std.Options.debug_io;
+    var tio = std.Io.Threaded.init(std.heap.page_allocator, .{});
+    defer tio.deinit();
+    const io = tio.io();
     const svc = try std.fmt.allocPrint(alloc, "csw-test-{d}-rt", .{@as(i64, c_time.time(null))});
     defer alloc.free(svc);
     delete(alloc, io, svc) catch {};
@@ -106,7 +110,9 @@ test "set e get round-trip" {
 
 test "set sobrescreve entrada existente" {
     const alloc = std.testing.allocator;
-    const io = std.Options.debug_io;
+    var tio = std.Io.Threaded.init(std.heap.page_allocator, .{});
+    defer tio.deinit();
+    const io = tio.io();
     const svc = try std.fmt.allocPrint(alloc, "csw-test-{d}-ow", .{@as(i64, c_time.time(null))});
     defer alloc.free(svc);
     delete(alloc, io, svc) catch {};
@@ -121,7 +127,9 @@ test "set sobrescreve entrada existente" {
 
 test "delete de entrada inexistente não falha" {
     const alloc = std.testing.allocator;
-    const io = std.Options.debug_io;
+    var tio = std.Io.Threaded.init(std.heap.page_allocator, .{});
+    defer tio.deinit();
+    const io = tio.io();
     const svc = try std.fmt.allocPrint(alloc, "csw-test-{d}-del", .{@as(i64, c_time.time(null))});
     defer alloc.free(svc);
     delete(alloc, io, svc) catch {};

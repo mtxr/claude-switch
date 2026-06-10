@@ -21,4 +21,4 @@ jobs:
         run: zig build
 
       - name: Test
-        run: zig build test
+        run: zig test -lsqlite3 src/main.zig -lc

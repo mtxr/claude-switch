@@ -560,7 +560,9 @@ test "listIn dir vazio" {
     const alloc = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const base = try tmp.dir.realpathAlloc(alloc, ".");
+    var base_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const base_len = try tmp.dir.realPath(std.Options.debug_io, &base_buf);
+    const base = try alloc.dupe(u8, base_buf[0..base_len]);
     defer alloc.free(base);
     const result = try listIn(alloc, base);
     defer alloc.free(result);
@@ -571,7 +573,9 @@ test "listIn encontra perfis ordenados" {
     const alloc = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const base = try tmp.dir.realpathAlloc(alloc, ".");
+    var base_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const base_len = try tmp.dir.realPath(std.Options.debug_io, &base_buf);
+    const base = try alloc.dupe(u8, base_buf[0..base_len]);
     defer alloc.free(base);
 
     for (&[_][]const u8{ "work", "personal" }) |name| {
@@ -579,7 +583,7 @@ test "listIn encontra perfis ordenados" {
         defer alloc.free(p);
         const p_z = try alloc.dupeZ(u8, p);
         defer alloc.free(p_z);
-        const fd = std.c.open(p_z, std.c.O.CREAT | std.c.O.WRONLY, @as(std.c.mode_t, 0o644));
+        const fd = std.c.open(p_z, .{ .ACCMODE = .WRONLY, .CREAT = true }, @as(std.c.mode_t, 0o644));
         if (fd >= 0) _ = std.c.close(fd);
     }
 
@@ -597,7 +601,9 @@ test "currentIn retorna null sem symlink" {
     const alloc = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const base = try tmp.dir.realpathAlloc(alloc, ".");
+    var base_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const base_len = try tmp.dir.realPath(std.Options.debug_io, &base_buf);
+    const base = try alloc.dupe(u8, base_buf[0..base_len]);
     defer alloc.free(base);
     try std.testing.expectEqual(@as(?[]const u8, null), try currentIn(alloc, base));
 }
@@ -606,14 +612,16 @@ test "currentIn retorna perfil ativo" {
     const alloc = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const base = try tmp.dir.realpathAlloc(alloc, ".");
+    var base_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const base_len = try tmp.dir.realPath(std.Options.debug_io, &base_buf);
+    const base = try alloc.dupe(u8, base_buf[0..base_len]);
     defer alloc.free(base);
 
     const p_json = try paths.profileJsonIn(alloc, base, "work");
     defer alloc.free(p_json);
     const p_z = try alloc.dupeZ(u8, p_json);
     defer alloc.free(p_z);
-    const fd = std.c.open(p_z, std.c.O.CREAT | std.c.O.WRONLY, @as(std.c.mode_t, 0o644));
+    const fd = std.c.open(p_z, .{ .ACCMODE = .WRONLY, .CREAT = true }, @as(std.c.mode_t, 0o644));
     if (fd >= 0) _ = std.c.close(fd);
 
     const cj = try paths.claudeJsonIn(alloc, base);
@@ -631,14 +639,16 @@ test "emailIn parseia email do JSON" {
     const alloc = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const base = try tmp.dir.realpathAlloc(alloc, ".");
+    var base_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const base_len = try tmp.dir.realPath(std.Options.debug_io, &base_buf);
+    const base = try alloc.dupe(u8, base_buf[0..base_len]);
     defer alloc.free(base);
 
     const path = try paths.profileJsonIn(alloc, base, "work");
     defer alloc.free(path);
     const path_z = try alloc.dupeZ(u8, path);
     defer alloc.free(path_z);
-    const fd = std.c.open(path_z, std.c.O.CREAT | std.c.O.WRONLY, @as(std.c.mode_t, 0o644));
+    const fd = std.c.open(path_z, .{ .ACCMODE = .WRONLY, .CREAT = true }, @as(std.c.mode_t, 0o644));
     if (fd >= 0) {
         const content = "{\"oauthAccount\":{\"emailAddress\":\"me@work.com\"}}";
         _ = std.c.write(fd, content.ptr, content.len);
