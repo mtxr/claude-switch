@@ -21,4 +21,25 @@ jobs:
         run: zig build
 
       - name: Test
-        run: zig test -lsqlite3 src/main.zig -lc
+        run: zig build test
+
+  build-release:
+    name: Release build ${{ matrix.arch }}
+    runs-on: ${{ matrix.runs-on }}
+    strategy:
+      matrix:
+        include:
+          - runs-on: macos-15
+            arch: aarch64
+          - runs-on: macos-13
+            arch: x86_64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Zig 0.16.0
+        uses: mlugg/setup-zig@v2
+        with:
+          version: "0.16.0"
+
+      - name: Build (release)
+        run: zig build -Doptimize=ReleaseSmall
