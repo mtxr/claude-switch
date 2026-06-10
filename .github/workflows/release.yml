@@ -1,9 +1,8 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - "v*"
+  release:
+    types: [published]
 
 permissions:
   contents: write
@@ -41,7 +40,7 @@ jobs:
           name: csw-${{ matrix.arch }}-apple-darwin
           path: csw-${{ matrix.arch }}-apple-darwin
 
-  release:
+  upload:
     needs: build
     runs-on: ubuntu-latest
     steps:
@@ -49,10 +48,11 @@ jobs:
         with:
           merge-multiple: true
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          generate_release_notes: true
-          files: |
-            csw-aarch64-apple-darwin
-            csw-x86_64-apple-darwin
+      - name: Upload binaries to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload ${{ github.event.release.tag_name }} \
+            csw-aarch64-apple-darwin \
+            csw-x86_64-apple-darwin \
+            --repo ${{ github.repository }}
