@@ -1,6 +1,6 @@
 .{
     .name = .csw,
-    .version = "0.2.1", // x-release-please-version
+    .version = "0.2.2", // x-release-please-version
     .fingerprint = 0x7fa362c1e4e8e0d1,
     .paths = .{""},
     .dependencies = .{},
