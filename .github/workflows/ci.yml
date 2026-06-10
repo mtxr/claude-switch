@@ -7,19 +7,18 @@ on:
 
 jobs:
   test:
-    name: Test
+    name: Build & Test
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Zig 0.16.0
+        uses: mlugg/setup-zig@v2
         with:
-          components: clippy
+          version: "0.16.0"
 
-      - uses: Swatinem/rust-cache@v2
-
-      - name: Clippy
-        run: cargo clippy -- -D warnings
+      - name: Build (debug)
+        run: zig build
 
       - name: Test
-        run: cargo test
+        run: zig build test
