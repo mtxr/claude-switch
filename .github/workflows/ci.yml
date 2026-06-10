@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: ["**"]
+    branches: [main]
   pull_request:
 
 jobs:
@@ -20,5 +20,8 @@ jobs:
       - name: Build (debug)
         run: zig build
 
+      - name: Build (release)
+        run: zig build -Doptimize=ReleaseSmall
+
       - name: Test
-        run: zig test -lsqlite3 src/main.zig -lc
+        run: zig build test
