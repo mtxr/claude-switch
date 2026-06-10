@@ -14,9 +14,9 @@ jobs:
     strategy:
       matrix:
         include:
-          - target: aarch64-apple-darwin
+          - target: aarch64-macos
             arch: aarch64
-          - target: x86_64-apple-darwin
+          - target: x86_64-macos
             arch: x86_64
 
     steps:
@@ -33,12 +33,12 @@ jobs:
             -Doptimize=ReleaseSmall \
             -Dtarget=${{ matrix.target }}
           strip zig-out/bin/csw
-          cp zig-out/bin/csw csw-${{ matrix.arch }}-apple-darwin
+          cp zig-out/bin/csw csw-${{ matrix.arch }}-macos
 
       - uses: actions/upload-artifact@v4
         with:
-          name: csw-${{ matrix.arch }}-apple-darwin
-          path: csw-${{ matrix.arch }}-apple-darwin
+          name: csw-${{ matrix.arch }}-macos
+          path: csw-${{ matrix.arch }}-macos
 
   upload:
     needs: build
@@ -53,6 +53,6 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release upload ${{ github.event.release.tag_name }} \
-            csw-aarch64-apple-darwin \
-            csw-x86_64-apple-darwin \
+            csw-aarch64-macos \
+            csw-x86_64-macos \
             --repo ${{ github.repository }}
