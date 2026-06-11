@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.3](https://github.com/mtxr/claude-switch/compare/v0.2.2...v0.2.3) (2026-06-10)
+
+
+### Bug Fixes
+
+* use native runners per arch to fix sqlite3 cross-compilation ([#6](https://github.com/mtxr/claude-switch/issues/6)) ([e63cb60](https://github.com/mtxr/claude-switch/commit/e63cb60e6b3df52127b9a9b61df758198ae9a004))
+
 ## [0.2.2](https://github.com/mtxr/claude-switch/compare/v0.2.1...v0.2.2) (2026-06-10)
 
 
