@@ -51,6 +51,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          cp zig-out/bin/csw "zig-out/bin/csw-${{ matrix.arch }}-apple-darwin"
           gh release upload ${{ needs.release-please.outputs.tag_name }} \
-            "zig-out/bin/csw#csw-${{ matrix.arch }}-apple-darwin" \
+            "zig-out/bin/csw-${{ matrix.arch }}-apple-darwin" \
             --repo ${{ github.repository }}
