@@ -209,7 +209,8 @@ fn run(gpa: std.mem.Allocator, io: std.Io, args: []const []const u8) !void {
     } else if (std.mem.eql(u8, cmd, "doctor")) {
         return cmdDoctor(gpa, io);
     } else if (std.mem.eql(u8, cmd, "update")) {
-        return cmdUpdate(gpa, io);
+        const verbose = args.len >= 2 and std.mem.eql(u8, args[1], "--verbose");
+        return cmdUpdate(gpa, io, verbose);
     } else if (std.mem.eql(u8, cmd, "logout-all")) {
         return profile.cmdLogoutAll(gpa, io);
     } else if (std.mem.eql(u8, cmd, "--version") or std.mem.eql(u8, cmd, "-v")) {
@@ -238,7 +239,7 @@ fn printHelp() void {
         \\  list             List all saved profiles
         \\  whoami           Show active session info
         \\  pick             Interactive profile picker (sk / fzf)
-        \\  update           Update csw to the latest release
+        \\  update [--verbose]  Update csw to the latest release
         \\  logout-all       Log out and remove all active symlinks
         \\  doctor           Check that everything csw needs is in order
         \\
@@ -583,7 +584,7 @@ fn printCodeSession(gpa: std.mem.Allocator, oauth: std.json.Value) !void {
     display.row("Token", token_preview);
 }
 
-fn cmdUpdate(gpa: std.mem.Allocator, io: std.Io) !void {
+fn cmdUpdate(gpa: std.mem.Allocator, io: std.Io, verbose: bool) !void {
     display.info("Checking for updates...");
 
     const url = try std.fmt.allocPrint(
@@ -663,6 +664,12 @@ fn cmdUpdate(gpa: std.mem.Allocator, io: std.Io) !void {
     const dl_msg = try std.fmt.allocPrint(gpa, "Downloading to {s}...", .{exe_path});
     defer gpa.free(dl_msg);
     display.info(dl_msg);
+
+    if (verbose) {
+        const url_msg = try std.fmt.allocPrint(gpa, "URL: {s}", .{dl_url});
+        defer gpa.free(url_msg);
+        display.info(url_msg);
+    }
 
     const tmp_path = try std.fmt.allocPrint(gpa, "{s}_update_tmp", .{exe_path});
     defer gpa.free(tmp_path);
