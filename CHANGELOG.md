@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.6](https://github.com/mtxr/claude-switch/compare/v0.2.5...v0.2.6) (2026-06-11)
+
+
+### Bug Fixes
+
+* bump VERSION to 0.2.5 and wire release-please to src/main.zig ([#12](https://github.com/mtxr/claude-switch/issues/12)) ([cd4210e](https://github.com/mtxr/claude-switch/commit/cd4210e4ed6d786dd9df11867c590ad8d08cb192))
+
 ## [0.2.5](https://github.com/mtxr/claude-switch/compare/v0.2.4...v0.2.5) (2026-06-11)
 
 
