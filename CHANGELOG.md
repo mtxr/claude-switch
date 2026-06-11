@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.4](https://github.com/mtxr/claude-switch/compare/v0.2.3...v0.2.4) (2026-06-11)
+
+
+### Bug Fixes
+
+* build arch-specific binaries in release workflow ([#8](https://github.com/mtxr/claude-switch/issues/8)) ([d81d617](https://github.com/mtxr/claude-switch/commit/d81d6172893d26198badcba8b1c9e6ce4b380220))
+
 ## [0.2.3](https://github.com/mtxr/claude-switch/compare/v0.2.2...v0.2.3) (2026-06-10)
 
 
