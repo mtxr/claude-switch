@@ -7,6 +7,10 @@
         {
           "type": "generic",
           "path": "build.zig.zon"
+        },
+        {
+          "type": "generic",
+          "path": "src/main.zig"
         }
       ]
     }
