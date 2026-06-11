@@ -20,7 +20,7 @@ comptime {
 const KEYCHAIN_CODE = "Claude Code-credentials";
 const KC_PROFILE_CODE = "csw-code-";
 const GITHUB_REPO = "mtxr/claude-switch";
-const VERSION = "0.2.0";
+const VERSION = "0.2.0"; // x-release-please-version
 const UPDATE_CACHE_FILE = "/tmp/csw-update-cache";
 const UPDATE_CHECK_INTERVAL_S = 86400; // 24h
 
