@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.5](https://github.com/mtxr/claude-switch/compare/v0.2.4...v0.2.5) (2026-06-11)
+
+
+### Bug Fixes
+
+* correct release asset name and add --verbose flag to update ([#10](https://github.com/mtxr/claude-switch/issues/10)) ([19091a6](https://github.com/mtxr/claude-switch/commit/19091a6af3c34b8f89787806fc48a03d717891e9))
+
 ## [0.2.4](https://github.com/mtxr/claude-switch/compare/v0.2.3...v0.2.4) (2026-06-11)
 
 
