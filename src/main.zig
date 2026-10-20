@@ -407,12 +407,9 @@ fn cmdWhoami(gpa: std.mem.Allocator, io: std.Io) !void {
     // ── Claude Desktop ───────────────────────────────────────────────────────
     if (desktop.getSessionKey(gpa, io)) |token| {
         defer gpa.free(token);
-        const preview_len = @min(token.len, 15);
-        const preview = try std.fmt.allocPrint(gpa, "{s}...", .{token[0..preview_len]});
-        defer gpa.free(preview);
         display.section("Claude Desktop");
         display.row("Token type", "sessionKey (sk-ant-sid)");
-        display.row("Token", preview);
+        display.row("Status", "sessionKey found");
         display.row("Storage", "Electron cookie (AES encrypted)");
     } else |_| {
         display.section("Claude Desktop");
