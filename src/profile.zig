@@ -8,10 +8,7 @@ const paths = @import("paths.zig");
 const platform = @import("platform.zig");
 const session = @import("session.zig");
 
-const c = @cImport({
-    @cInclude("dirent.h");
-    @cInclude("unistd.h");
-});
+const c = @import("c");
 
 const KEYCHAIN_CODE = "Claude Code-credentials";
 const KC_PROFILE_CODE = "csw-code-";
@@ -189,7 +186,7 @@ pub fn cmdNew(gpa: std.mem.Allocator, io: std.Io, name: []const u8, opts: Option
     if (previous) |p| _ = try desktop.adoptOwnerIn(gpa, h, p);
 
     {
-        const p_json_z = try gpa.dupeZ(u8, p_json);
+        const p_json_z = try gpa.dupeSentinel(u8, p_json, 0);
         defer gpa.free(p_json_z);
         const fd = std.c.open(p_json_z, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, @as(std.c.mode_t, 0o600));
         if (fd < 0) return error.CreateFileFailed;
@@ -425,7 +422,7 @@ pub fn listIn(gpa: std.mem.Allocator, base: []const u8) ![]const []const u8 {
         results.deinit(gpa);
     }
 
-    const base_z = try gpa.dupeZ(u8, base);
+    const base_z = try gpa.dupeSentinel(u8, base, 0);
     defer gpa.free(base_z);
 
     const dir_handle = c.opendir(base_z) orelse return results.toOwnedSlice(gpa);
@@ -472,7 +469,7 @@ pub fn profileJsonEmailIn(gpa: std.mem.Allocator, base: []const u8, name: []cons
     const path = try paths.profileJsonIn(gpa, base, name);
     defer gpa.free(path);
 
-    const path_z = try gpa.dupeZ(u8, path);
+    const path_z = try gpa.dupeSentinel(u8, path, 0);
     defer gpa.free(path_z);
 
     const fd = std.c.open(path_z, .{}, @as(std.c.mode_t, 0));
@@ -501,9 +498,9 @@ pub fn switchLinkIn(gpa: std.mem.Allocator, link: []const u8, target: []const u8
         return error.NotASymlink;
     }
 
-    const target_z = try gpa.dupeZ(u8, target);
+    const target_z = try gpa.dupeSentinel(u8, target, 0);
     defer gpa.free(target_z);
-    const link_z = try gpa.dupeZ(u8, link);
+    const link_z = try gpa.dupeSentinel(u8, link, 0);
     defer gpa.free(link_z);
     if (std.c.symlink(target_z, link_z) != 0) return error.SymlinkFailed;
 }
@@ -547,9 +544,9 @@ pub fn migrateToProfileIn(gpa: std.mem.Allocator, io: std.Io, base: []const u8, 
         defer gpa.free(msg);
         display.info(msg);
         try desktop.renameC(gpa, cj, p_json);
-        const pj_z = try gpa.dupeZ(u8, p_json);
+        const pj_z = try gpa.dupeSentinel(u8, p_json, 0);
         defer gpa.free(pj_z);
-        const cj_z = try gpa.dupeZ(u8, cj);
+        const cj_z = try gpa.dupeSentinel(u8, cj, 0);
         defer gpa.free(cj_z);
         if (std.c.symlink(pj_z, cj_z) != 0) return error.SymlinkFailed;
     }
@@ -559,9 +556,9 @@ pub fn migrateToProfileIn(gpa: std.mem.Allocator, io: std.Io, base: []const u8, 
         defer gpa.free(msg);
         display.info(msg);
         try desktop.renameC(gpa, cd, p_dir);
-        const pd_z = try gpa.dupeZ(u8, p_dir);
+        const pd_z = try gpa.dupeSentinel(u8, p_dir, 0);
         defer gpa.free(pd_z);
-        const cd_z = try gpa.dupeZ(u8, cd);
+        const cd_z = try gpa.dupeSentinel(u8, cd, 0);
         defer gpa.free(cd_z);
         if (std.c.symlink(pd_z, cd_z) != 0) return error.SymlinkFailed;
     }
@@ -720,7 +717,7 @@ test "listIn finds profiles in sorted order" {
     for (&[_][]const u8{ "work", "personal" }) |name| {
         const p = try paths.profileJsonIn(alloc, base, name);
         defer alloc.free(p);
-        const p_z = try alloc.dupeZ(u8, p);
+        const p_z = try alloc.dupeSentinel(u8, p, 0);
         defer alloc.free(p_z);
         const fd = std.c.open(p_z, .{ .ACCMODE = .WRONLY, .CREAT = true }, @as(std.c.mode_t, 0o644));
         if (fd >= 0) _ = std.c.close(fd);
@@ -758,14 +755,14 @@ test "currentIn returns the active profile" {
 
     const p_json = try paths.profileJsonIn(alloc, base, "work");
     defer alloc.free(p_json);
-    const p_z = try alloc.dupeZ(u8, p_json);
+    const p_z = try alloc.dupeSentinel(u8, p_json, 0);
     defer alloc.free(p_z);
     const fd = std.c.open(p_z, .{ .ACCMODE = .WRONLY, .CREAT = true }, @as(std.c.mode_t, 0o644));
     if (fd >= 0) _ = std.c.close(fd);
 
     const cj = try paths.claudeJsonIn(alloc, base);
     defer alloc.free(cj);
-    const cj_z = try alloc.dupeZ(u8, cj);
+    const cj_z = try alloc.dupeSentinel(u8, cj, 0);
     defer alloc.free(cj_z);
     if (std.c.symlink(p_z, cj_z) != 0) return error.SymlinkFailed;
 
@@ -785,7 +782,7 @@ test "emailIn parses email from JSON" {
 
     const path = try paths.profileJsonIn(alloc, base, "work");
     defer alloc.free(path);
-    const path_z = try alloc.dupeZ(u8, path);
+    const path_z = try alloc.dupeSentinel(u8, path, 0);
     defer alloc.free(path_z);
     const fd = std.c.open(path_z, .{ .ACCMODE = .WRONLY, .CREAT = true }, @as(std.c.mode_t, 0o644));
     if (fd >= 0) {
@@ -810,7 +807,7 @@ test "pickerLinesIn aligns name and email" {
 
     const p = try paths.profileJsonIn(alloc, base, "work");
     defer alloc.free(p);
-    const p_z = try alloc.dupeZ(u8, p);
+    const p_z = try alloc.dupeSentinel(u8, p, 0);
     defer alloc.free(p_z);
     const fd = std.c.open(p_z, .{ .ACCMODE = .WRONLY, .CREAT = true }, @as(std.c.mode_t, 0o644));
     try std.testing.expect(fd >= 0);
@@ -857,7 +854,7 @@ const TestDir = struct {
     fn write(self: TestDir, alloc: std.mem.Allocator, name: []const u8, content: []const u8) !void {
         const path = try self.join(alloc, name);
         defer alloc.free(path);
-        const path_z = try alloc.dupeZ(u8, path);
+        const path_z = try alloc.dupeSentinel(u8, path, 0);
         defer alloc.free(path_z);
         const fd = std.c.open(path_z, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, @as(std.c.mode_t, 0o600));
         try std.testing.expect(fd >= 0);
@@ -892,9 +889,9 @@ fn testIo() std.Io.Threaded {
 fn linkAndCurrent(alloc: std.mem.Allocator, td: TestDir, target: []const u8) !?[]const u8 {
     const link = try paths.claudeJsonIn(alloc, td.base);
     defer alloc.free(link);
-    const link_z = try alloc.dupeZ(u8, link);
+    const link_z = try alloc.dupeSentinel(u8, link, 0);
     defer alloc.free(link_z);
-    const target_z = try alloc.dupeZ(u8, target);
+    const target_z = try alloc.dupeSentinel(u8, target, 0);
     defer alloc.free(target_z);
     try std.testing.expectEqual(@as(c_int, 0), std.c.symlink(target_z, link_z));
     return currentIn(alloc, td.base);
@@ -1112,7 +1109,7 @@ const FlowHome = struct {
 
     fn enter(alloc: std.mem.Allocator, base: []const u8) !FlowHome {
         const previous = if (std.c.getenv("HOME")) |v| try alloc.dupe(u8, std.mem.sliceTo(v, 0)) else null;
-        const base_z = try alloc.dupeZ(u8, base);
+        const base_z = try alloc.dupeSentinel(u8, base, 0);
         defer alloc.free(base_z);
         try std.testing.expectEqual(@as(c_int, 0), setenv("HOME", base_z, 1));
         return .{ .previous = previous };
@@ -1120,7 +1117,7 @@ const FlowHome = struct {
 
     fn leave(self: FlowHome, alloc: std.mem.Allocator) void {
         if (self.previous) |p| {
-            const p_z = alloc.dupeZ(u8, p) catch return;
+            const p_z = alloc.dupeSentinel(u8, p, 0) catch return;
             defer alloc.free(p_z);
             _ = setenv("HOME", p_z, 1);
             alloc.free(p);

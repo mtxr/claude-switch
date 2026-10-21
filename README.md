@@ -16,7 +16,7 @@ This downloads the latest release binary for your architecture (arm64 or x86_64)
 
 ### Option 2 — build from source
 
-Requires [Zig 0.16.0](https://ziglang.org/download/) (or install via [mise](https://mise.jdx.dev): `mise use zig@0.16.0`).
+Requires [Zig 0.17.0](https://ziglang.org/download/) (or install via [mise](https://mise.jdx.dev): `mise use zig@0.17.0`).
 
 ```bash
 git clone https://github.com/mtxr/claude-switch

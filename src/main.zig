@@ -60,10 +60,10 @@ fn readUpdateCache(gpa: std.mem.Allocator, cache_path_z: [*:0]const u8) version.
 }
 
 fn checkUpdateSilent(gpa: std.mem.Allocator, io: std.Io) void {
-    const c_time = @cImport(@cInclude("time.h"));
+    const c_time = @import("c");
     const now: i64 = c_time.time(null);
 
-    const cache_path_z = gpa.dupeZ(u8, UPDATE_CACHE_FILE) catch return;
+    const cache_path_z = gpa.dupeSentinel(u8, UPDATE_CACHE_FILE, 0) catch return;
     defer gpa.free(cache_path_z);
 
     const cache = readUpdateCache(gpa, cache_path_z);
@@ -91,10 +91,10 @@ fn checkUpdateSilent(gpa: std.mem.Allocator, io: std.Io) void {
 }
 
 fn cmdCheckUpdateBg(gpa: std.mem.Allocator, io: std.Io) void {
-    const c_time = @cImport(@cInclude("time.h"));
+    const c_time = @import("c");
     const now: i64 = c_time.time(null);
 
-    const cache_path_z = gpa.dupeZ(u8, UPDATE_CACHE_FILE) catch return;
+    const cache_path_z = gpa.dupeSentinel(u8, UPDATE_CACHE_FILE, 0) catch return;
     defer gpa.free(cache_path_z);
 
     const url = std.fmt.allocPrint(gpa, "https://api.github.com/repos/{s}/releases/latest", .{GITHUB_REPO}) catch return;
@@ -498,7 +498,7 @@ fn printCodeSession(gpa: std.mem.Allocator, oauth: std.json.Value) !void {
     defer account.deinit(gpa);
 
     readProfileJson: {
-        const cj_z = gpa.dupeZ(u8, cj) catch break :readProfileJson;
+        const cj_z = gpa.dupeSentinel(u8, cj, 0) catch break :readProfileJson;
         defer gpa.free(cj_z);
         const fd = std.c.open(cj_z, .{}, @as(std.c.mode_t, 0));
         if (fd < 0) break :readProfileJson;
@@ -649,9 +649,9 @@ fn cmdUpdate(gpa: std.mem.Allocator, io: std.Io, verbose: bool) !void {
         return error.DownloadFailed;
     }
 
-    const tmp_path_z = try gpa.dupeZ(u8, tmp_path);
+    const tmp_path_z = try gpa.dupeSentinel(u8, tmp_path, 0);
     defer gpa.free(tmp_path_z);
-    const exe_path_z = try gpa.dupeZ(u8, exe_path);
+    const exe_path_z = try gpa.dupeSentinel(u8, exe_path, 0);
     defer gpa.free(exe_path_z);
     _ = std.c.chmod(tmp_path_z, 0o755);
     if (std.c.rename(tmp_path_z, exe_path_z) != 0) return error.RenameFailed;
