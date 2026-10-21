@@ -1,8 +1,4 @@
-//! display.zig — output formatado no terminal
-//!
-//! Zig 0.16 introduziu std.Io como abstração de I/O assíncrono.
-//! Para um CLI simples, usamos std.posix.write diretamente —
-//! não precisamos da abstração Io só para println.
+//! display.zig — formatted terminal output
 
 const std = @import("std");
 const c = @cImport({
@@ -62,12 +58,12 @@ pub fn print(comptime fmt: []const u8, args: anytype) void {
     printOut(fmt, args);
 }
 
-/// Formata ms de expiração como string humana. Caller libera.
+/// Formats an expiry in ms as a human-readable string. Caller frees.
 pub fn fmtExpiry(allocator: std.mem.Allocator, expires_ms: i64) ![]const u8 {
     if (expires_ms == 0) return allocator.dupe(u8, "?");
 
     var ts: c.struct_timespec = undefined;
-    _ = c.clock_gettime(0, &ts); // CLOCK_REALTIME = 0
+    _ = c.clock_gettime(0, &ts);
     const now_ms = @as(i64, ts.tv_sec) * 1000 + @divTrunc(@as(i64, ts.tv_nsec), 1_000_000);
     const remaining_hours = @divTrunc(expires_ms - now_ms, 1000 * 3600);
     const expires_sec: c.time_t = @intCast(@divTrunc(expires_ms, 1000));
@@ -87,7 +83,7 @@ pub fn fmtExpiry(allocator: std.mem.Allocator, expires_ms: i64) ![]const u8 {
     }
 }
 
-/// Formata scopes JSON como string. Caller libera.
+/// Formats JSON scopes as a string. Caller frees.
 pub fn fmtScopes(allocator: std.mem.Allocator, scopes: []const std.json.Value) ![]const u8 {
     if (scopes.len == 0) return allocator.dupe(u8, "?");
 
@@ -105,16 +101,14 @@ pub fn fmtScopes(allocator: std.mem.Allocator, scopes: []const std.json.Value) !
     return std.mem.join(allocator, ", ", parts.items);
 }
 
-// ── Tests ────────────────────────────────────────────────────────────────────
-
-test "fmtExpiry retorna ? para zero" {
+test "fmtExpiry returns ? for zero" {
     const alloc = std.testing.allocator;
     const result = try fmtExpiry(alloc, 0);
     defer alloc.free(result);
     try std.testing.expectEqualStrings("?", result);
 }
 
-test "fmtExpiry passado mostra EXPIRED" {
+test "fmtExpiry in the past shows EXPIRED" {
     const alloc = std.testing.allocator;
     const past_ms = (c.time(null) - 3600) * 1000;
     const result = try fmtExpiry(alloc, past_ms);
@@ -122,7 +116,7 @@ test "fmtExpiry passado mostra EXPIRED" {
     try std.testing.expect(std.mem.indexOf(u8, result, "EXPIRED") != null);
 }
 
-test "fmtExpiry dentro de 24h mostra horas" {
+test "fmtExpiry within 24h shows hours" {
     const alloc = std.testing.allocator;
     const soon_ms = (c.time(null) + 12 * 3600) * 1000;
     const result = try fmtExpiry(alloc, soon_ms);
@@ -130,7 +124,7 @@ test "fmtExpiry dentro de 24h mostra horas" {
     try std.testing.expect(std.mem.indexOf(u8, result, "h remaining") != null);
 }
 
-test "fmtExpiry além de 24h mostra dias" {
+test "fmtExpiry beyond 24h shows days" {
     const alloc = std.testing.allocator;
     const future_ms = (c.time(null) + 3 * 24 * 3600) * 1000;
     const result = try fmtExpiry(alloc, future_ms);
@@ -138,14 +132,14 @@ test "fmtExpiry além de 24h mostra dias" {
     try std.testing.expect(std.mem.indexOf(u8, result, "d remaining") != null);
 }
 
-test "fmtScopes vazio retorna ?" {
+test "fmtScopes empty returns ?" {
     const alloc = std.testing.allocator;
     const result = try fmtScopes(alloc, &.{});
     defer alloc.free(result);
     try std.testing.expectEqualStrings("?", result);
 }
 
-test "fmtScopes remove prefixo user:" {
+test "fmtScopes strips user: prefix" {
     const alloc = std.testing.allocator;
     const scopes = [_]std.json.Value{
         .{ .string = "user:inference" },
@@ -156,7 +150,7 @@ test "fmtScopes remove prefixo user:" {
     try std.testing.expectEqualStrings("inference, profile", result);
 }
 
-test "fmtScopes ignora não-strings" {
+test "fmtScopes ignores non-strings" {
     const alloc = std.testing.allocator;
     const scopes = [_]std.json.Value{
         .{ .string = "user:inference" },

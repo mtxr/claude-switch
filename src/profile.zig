@@ -1,4 +1,4 @@
-//! profile.zig — gerenciamento de perfis
+//! profile.zig — profile management
 
 const std = @import("std");
 const desktop = @import("desktop.zig");
@@ -14,7 +14,6 @@ const c = @cImport({
 const KEYCHAIN_CODE = "Claude Code-credentials";
 const KC_PROFILE_CODE = "csw-code-";
 
-// ── API pública ───────────────────────────────────────────────────────────────
 
 pub fn list(gpa: std.mem.Allocator) ![]const []const u8 {
     const h = try paths.home(gpa);
@@ -130,7 +129,6 @@ pub fn cmdNew(gpa: std.mem.Allocator, io: std.Io, name: []const u8) !void {
     try ensureCurrentSavedIn(gpa, io, h);
     desktop.quit(gpa, io);
 
-    // Create empty profile JSON
     {
         const p_json_z = try gpa.dupeZ(u8, p_json);
         defer gpa.free(p_json_z);
@@ -303,7 +301,6 @@ pub fn cmdLogoutAll(gpa: std.mem.Allocator, io: std.Io) !void {
     display.ok("Logged out of all accounts. Symlinks removed.");
 }
 
-// ── Helpers internos (pub para testes) ───────────────────────────────────────
 
 pub fn listIn(gpa: std.mem.Allocator, base: []const u8) ![]const []const u8 {
     var results: std.ArrayList([]const u8) = .empty;
@@ -489,7 +486,7 @@ fn ensureCurrentSavedIn(gpa: std.mem.Allocator, io: std.Io, base: []const u8) !v
     if (line.len > 0) try cmdSave(gpa, io, line);
 }
 
-/// Linhas do picker: nome alinhado + tab + email (se houver). Caller libera.
+/// Picker lines: aligned name + tab + email (if any). Caller frees.
 pub fn pickerLinesIn(gpa: std.mem.Allocator, base: []const u8, profiles: []const []const u8) ![]const []const u8 {
     var width: usize = 0;
     for (profiles) |p| width = @max(width, p.len);
@@ -512,7 +509,7 @@ pub fn pickerLinesIn(gpa: std.mem.Allocator, base: []const u8, profiles: []const
     return lines.toOwnedSlice(gpa);
 }
 
-/// Extrai o nome do perfil de uma linha escolhida no picker.
+/// Extracts the profile name from a line chosen in the picker.
 pub fn pickerName(line: []const u8) []const u8 {
     const end = std.mem.indexOfScalar(u8, line, '\t') orelse line.len;
     return std.mem.trim(u8, line[0..end], " \t\n\r");
@@ -528,7 +525,6 @@ fn fuzzyPick(gpa: std.mem.Allocator, io: std.Io, base: []const u8, profiles: []c
         gpa.free(items);
     }
 
-    // stdin=pipe (we write items), stdout=pipe (we read selection), stderr=inherit (sk renders UI to terminal)
     var child = try std.process.spawn(io, .{
         .argv = &.{ cmd, "--prompt", prompt },
         .stdin = .pipe,
@@ -589,9 +585,8 @@ fn deleteTreeC(gpa: std.mem.Allocator, io: std.Io, path: []const u8) !void {
     gpa.free(result.stderr);
 }
 
-// ── Tests ─────────────────────────────────────────────────────────────────────
 
-test "listIn dir vazio" {
+test "listIn empty dir" {
     const alloc = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -604,7 +599,7 @@ test "listIn dir vazio" {
     try std.testing.expectEqual(@as(usize, 0), result.len);
 }
 
-test "listIn encontra perfis ordenados" {
+test "listIn finds profiles in sorted order" {
     const alloc = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -632,7 +627,7 @@ test "listIn encontra perfis ordenados" {
     try std.testing.expectEqualStrings("work", result[1]);
 }
 
-test "currentIn retorna null sem symlink" {
+test "currentIn returns null without symlink" {
     const alloc = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -643,7 +638,7 @@ test "currentIn retorna null sem symlink" {
     try std.testing.expectEqual(@as(?[]const u8, null), try currentIn(alloc, base));
 }
 
-test "currentIn retorna perfil ativo" {
+test "currentIn returns the active profile" {
     const alloc = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -670,7 +665,7 @@ test "currentIn retorna perfil ativo" {
     try std.testing.expectEqualStrings("work", result.?);
 }
 
-test "emailIn parseia email do JSON" {
+test "emailIn parses email from JSON" {
     const alloc = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -695,7 +690,7 @@ test "emailIn parseia email do JSON" {
     try std.testing.expectEqualStrings("me@work.com", result.?);
 }
 
-test "pickerLinesIn alinha nome e email" {
+test "pickerLinesIn aligns name and email" {
     const alloc = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -723,7 +718,7 @@ test "pickerLinesIn alinha nome e email" {
     try std.testing.expectEqualStrings("work    \tme@work.com", lines[1]);
 }
 
-test "pickerName extrai nome da linha" {
+test "pickerName extracts name from line" {
     try std.testing.expectEqualStrings("work", pickerName("work    \tme@work.com\n"));
     try std.testing.expectEqualStrings("personal", pickerName("personal\n"));
     try std.testing.expectEqualStrings("", pickerName("\n"));

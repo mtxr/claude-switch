@@ -1,20 +1,14 @@
-//! paths.zig — construtores de caminhos do filesystem
+//! paths.zig — filesystem path builders
 //!
-//! Em Rust, PathBuf é heap-allocated e owned.
-//! Em Zig, strings são []u8 ou []const u8 — simples slices de bytes.
-//! Funções que constroem paths precisam de um allocator e retornam []const u8.
-//! O caller é sempre responsável por `allocator.free`.
+//! Functions that build paths take an allocator and return `[]const u8`; the caller frees them.
 
 const std = @import("std");
 
-/// Retorna o diretório HOME do usuário (alocado — caller libera).
+/// Returns the user's HOME directory. Caller frees.
 pub fn home(allocator: std.mem.Allocator) ![]const u8 {
-    // std.process.getEnvVarOwned aloca a string e retorna erro se a variável não existir
     const val = std.c.getenv("HOME") orelse return error.HomeNotSet;
     return allocator.dupe(u8, std.mem.sliceTo(val, 0));
 }
-
-// Variantes `_in` recebem um base explícito (útil em testes com tmpdir)
 
 pub fn claudeJsonIn(allocator: std.mem.Allocator, base: []const u8) ![]const u8 {
     return std.fs.path.join(allocator, &.{ base, ".claude.json" });
@@ -25,7 +19,6 @@ pub fn claudeDirIn(allocator: std.mem.Allocator, base: []const u8) ![]const u8 {
 }
 
 pub fn profileJsonIn(allocator: std.mem.Allocator, base: []const u8, name: []const u8) ![]const u8 {
-    // std.fmt.allocPrint é equivalente ao format!() do Rust, mas retorna um slice alocado
     const filename = try std.fmt.allocPrint(allocator, ".claude.{s}.json", .{name});
     defer allocator.free(filename);
     return std.fs.path.join(allocator, &.{ base, filename });
@@ -47,16 +40,14 @@ pub fn desktopProfileDirIn(allocator: std.mem.Allocator, base: []const u8, name:
     return std.fs.path.join(allocator, &.{ base, "Library", "Application Support", dirname });
 }
 
-// ── Tests ────────────────────────────────────────────────────────────────────
-
-test "home retorna caminho absoluto" {
+test "home returns an absolute path" {
     const alloc = std.testing.allocator;
     const h = try home(alloc);
     defer alloc.free(h);
     try std.testing.expect(std.fs.path.isAbsolute(h));
 }
 
-test "paths são relativos à base" {
+test "paths are relative to the base" {
     const alloc = std.testing.allocator;
     const base = "/tmp/testbase";
 

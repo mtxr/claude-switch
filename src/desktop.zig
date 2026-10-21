@@ -1,4 +1,4 @@
-//! desktop.zig — Claude Desktop: quit, launch, swap, leitura de sessão via SQLite C FFI
+//! desktop.zig — Claude Desktop: quit, launch, swap, session read via SQLite C FFI
 
 const std = @import("std");
 const crypto = @import("crypto.zig");
@@ -64,7 +64,7 @@ pub fn swap(gpa: std.mem.Allocator, current_name: ?[]const u8, to_name: []const 
 
 pub fn getSessionKey(gpa: std.mem.Allocator, io: std.Io) ![]const u8 {
     const raw_key = keychain.get(gpa, io, KEYCHAIN_DESKTOP) catch {
-        display.err("Claude Safe Storage não encontrado no Keychain. Claude Desktop está instalado?");
+        display.err("Claude Safe Storage not found in Keychain. Is Claude Desktop installed?");
         return error.KeychainNotFound;
     };
     defer gpa.free(raw_key);
@@ -73,14 +73,11 @@ pub fn getSessionKey(gpa: std.mem.Allocator, io: std.Io) ![]const u8 {
     return getSessionKeyWithKeyIn(gpa, h, raw_key);
 }
 
-// ── Variantes _in ─────────────────────────────────────────────────────────────
-
 pub fn hasDataIn(gpa: std.mem.Allocator, base: []const u8, name: []const u8) bool {
     const d = paths.desktopProfileDirIn(gpa, base, name) catch return false;
     defer gpa.free(d);
     const d_z = gpa.dupeZ(u8, d) catch return false;
     defer gpa.free(d_z);
-    // Use opendir to check if dir has any entries
     const dir_handle = std.c.opendir(d_z) orelse return false;
     defer _ = std.c.closedir(dir_handle);
     var found = false;
@@ -143,7 +140,7 @@ pub fn getSessionKeyWithKeyIn(gpa: std.mem.Allocator, base: []const u8, raw_key:
     defer gpa.free(cookies_path);
 
     if (!pathExists(gpa, cookies_path)) {
-        display.err("Cookies DB não encontrado");
+        display.err("Cookies DB not found");
         return error.CookiesDbNotFound;
     }
 
@@ -164,7 +161,7 @@ pub fn getSessionKeyWithKeyIn(gpa: std.mem.Allocator, base: []const u8, raw_key:
     defer _ = c.sqlite3_finalize(stmt);
 
     if (c.sqlite3_step(stmt) != c.SQLITE_ROW) {
-        display.err("Claude Desktop: cookie sessionKey não encontrado");
+        display.err("Claude Desktop: sessionKey cookie not found");
         return error.SessionKeyNotFound;
     }
 
@@ -176,13 +173,11 @@ pub fn getSessionKeyWithKeyIn(gpa: std.mem.Allocator, base: []const u8, raw_key:
     defer gpa.free(decrypted);
 
     const idx = std.mem.indexOf(u8, decrypted, "sk-ant") orelse {
-        display.err("Claude Desktop: token não encontrado no cookie");
+        display.err("Claude Desktop: token not found in cookie");
         return error.TokenNotFound;
     };
     return gpa.dupe(u8, decrypted[idx..]);
 }
-
-// ── Helpers via std.c (sem io) ────────────────────────────────────────────────
 
 pub fn pathExists(gpa: std.mem.Allocator, path: []const u8) bool {
     const path_z = gpa.dupeZ(u8, path) catch return false;
@@ -212,7 +207,6 @@ pub fn deletePathC(gpa: std.mem.Allocator, path: []const u8) void {
 }
 
 pub fn deleteDirC(gpa: std.mem.Allocator, path: []const u8) void {
-    // recursive rmdir via rm -rf would need subprocess; use rmdir for non-recursive
     const path_z = gpa.dupeZ(u8, path) catch return;
     defer gpa.free(path_z);
     _ = std.c.rmdir(path_z);
@@ -227,14 +221,13 @@ pub fn renameC(gpa: std.mem.Allocator, old: []const u8, new: []const u8) !void {
 }
 
 pub fn mkdirAllC(gpa: std.mem.Allocator, abs_path: []const u8) !void {
-    // Create all path components via mkdir
     var i: usize = 1;
     while (i <= abs_path.len) : (i += 1) {
         if (i < abs_path.len and abs_path[i] != '/') continue;
         const segment = abs_path[0..i];
         const seg_z = try gpa.dupeZ(u8, segment);
         defer gpa.free(seg_z);
-        _ = std.c.mkdir(seg_z, 0o755); // ignore errors (dir may already exist)
+        _ = std.c.mkdir(seg_z, 0o755);
     }
 }
 
@@ -260,9 +253,7 @@ pub fn hasSessionKeyCookie(gpa: std.mem.Allocator, base: []const u8) bool {
     return c.sqlite3_step(stmt) == c.SQLITE_ROW;
 }
 
-// ── Tests ─────────────────────────────────────────────────────────────────────
-
-test "hasData false quando dir não existe" {
+test "hasData is false when dir does not exist" {
     const alloc = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -273,7 +264,7 @@ test "hasData false quando dir não existe" {
     try std.testing.expect(!hasDataIn(alloc, base, "work"));
 }
 
-test "hasData true quando dir tem arquivos" {
+test "hasData is true when dir has files" {
     const alloc = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -296,7 +287,7 @@ test "hasData true quando dir tem arquivos" {
     try std.testing.expect(hasDataIn(alloc, base, "work"));
 }
 
-test "swap move dirs corretamente" {
+test "swap moves dirs correctly" {
     const alloc = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -339,7 +330,7 @@ test "swap move dirs corretamente" {
     try std.testing.expect(pathExists(alloc, work_marker));
 }
 
-test "getSessionKey decripta cookie" {
+test "getSessionKey decrypts cookie" {
     const alloc = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -357,7 +348,7 @@ test "getSessionKey decripta cookie" {
     try std.testing.expectEqualStrings(token, result);
 }
 
-test "getSessionKey encontra sk-ant no meio de ruído" {
+test "getSessionKey finds sk-ant amid noise" {
     const alloc = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -372,7 +363,7 @@ test "getSessionKey encontra sk-ant no meio de ruído" {
     try std.testing.expectEqualStrings("sk-ant-sid01-real-token", result);
 }
 
-test "getSessionKey falha quando DB não existe" {
+test "getSessionKey fails when DB does not exist" {
     const alloc = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();

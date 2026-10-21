@@ -1,7 +1,4 @@
-//! keychain.zig — acesso ao Keychain do macOS via CLI `security`
-//!
-//! Zig 0.16: std.process.run agora requer (gpa, io, options).
-//! O campo term passou de .Exited para .exited (snake_case).
+//! keychain.zig — macOS Keychain access via the `security` CLI
 
 const std = @import("std");
 const c_time = @cImport(@cInclude("time.h"));
@@ -78,10 +75,7 @@ pub fn delete(gpa: std.mem.Allocator, io: std.Io, service: []const u8) !void {
     gpa.free(result.stderr);
 }
 
-// ── Tests ─────────────────────────────────────────────────────────────────────
-// Esses testes requerem Keychain real — rodam no macOS com permissão.
-
-test "get em serviço inexistente retorna erro" {
+test "get on a missing service returns an error" {
     const alloc = std.testing.allocator;
     var tio = std.Io.Threaded.init(std.heap.page_allocator, .{});
     defer tio.deinit();
@@ -92,7 +86,7 @@ test "get em serviço inexistente retorna erro" {
     try std.testing.expectError(error.KeychainNotFound, get(alloc, io, svc));
 }
 
-test "set e get round-trip" {
+test "set and get round-trip" {
     const alloc = std.testing.allocator;
     var tio = std.Io.Threaded.init(std.heap.page_allocator, .{});
     defer tio.deinit();
@@ -108,7 +102,7 @@ test "set e get round-trip" {
     try std.testing.expectEqualStrings("secret-value", val);
 }
 
-test "set sobrescreve entrada existente" {
+test "set overwrites existing entry" {
     const alloc = std.testing.allocator;
     var tio = std.Io.Threaded.init(std.heap.page_allocator, .{});
     defer tio.deinit();
@@ -125,7 +119,7 @@ test "set sobrescreve entrada existente" {
     try std.testing.expectEqualStrings("second", val);
 }
 
-test "delete de entrada inexistente não falha" {
+test "delete of a missing entry does not fail" {
     const alloc = std.testing.allocator;
     var tio = std.Io.Threaded.init(std.heap.page_allocator, .{});
     defer tio.deinit();

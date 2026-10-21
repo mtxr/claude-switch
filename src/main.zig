@@ -1,4 +1,4 @@
-//! main.zig — entry point e parser de argumentos
+//! main.zig — entry point and argument parser
 
 const std = @import("std");
 const display = @import("display.zig");
@@ -7,7 +7,6 @@ const desktop = @import("desktop.zig");
 const paths = @import("paths.zig");
 const profile = @import("profile.zig");
 
-// Re-exporta os módulos para que `zig build test` colete todos os test blocks.
 comptime {
     _ = @import("crypto.zig");
     _ = @import("display.zig");
@@ -22,17 +21,16 @@ const KC_PROFILE_CODE = "csw-code-";
 const GITHUB_REPO = "mtxr/claude-switch";
 const VERSION = "0.2.6"; // x-release-please-version
 const UPDATE_CACHE_FILE = "/tmp/csw-update-cache";
-const UPDATE_CHECK_INTERVAL_S = 86400; // 24h
+const UPDATE_CHECK_INTERVAL_S = 86400;
 
 pub fn main(init: std.process.Init) !void {
     const gpa = init.gpa;
     const io = init.io;
 
-    // Collect args (skip argv[0])
     var args_list: std.ArrayList([]const u8) = .empty;
     defer args_list.deinit(gpa);
     var iter = init.minimal.args.iterate();
-    _ = iter.next(); // skip program name
+    _ = iter.next();
     while (iter.next()) |arg| {
         try args_list.append(gpa, arg);
     }
@@ -94,7 +92,6 @@ fn checkUpdateSilent(gpa: std.mem.Allocator, io: std.Io) void {
     const cache = readUpdateCache(gpa, cache_path_z);
     defer if (cache.version) |v| gpa.free(v);
 
-    // Show notice from cache instantly — zero network latency
     if (cache.version) |latest| {
         if (isNewerVersion(latest, VERSION)) {
             const msg = std.fmt.allocPrint(gpa, "Update available: v{s} → v{s}  (run: csw update)", .{ VERSION, latest }) catch return;
@@ -103,10 +100,8 @@ fn checkUpdateSilent(gpa: std.mem.Allocator, io: std.Io) void {
         }
     }
 
-    // If cache is fresh, nothing else to do
     if (now - cache.checked < UPDATE_CHECK_INTERVAL_S) return;
 
-    // Spawn self as background process to refresh the cache — parent returns immediately
     var exe_buf: [std.fs.max_path_bytes]u8 = undefined;
     var size: u32 = @intCast(exe_buf.len);
     if (std.c._NSGetExecutablePath(&exe_buf, &size) != 0) return;
@@ -118,10 +113,8 @@ fn checkUpdateSilent(gpa: std.mem.Allocator, io: std.Io) void {
         .stdout = .ignore,
         .stderr = .ignore,
     }) catch return;
-    // Don't wait — child runs in background and writes to cache, parent continues
 }
 
-// Hidden command: fetch latest release from GitHub and write to cache. No output.
 fn cmdCheckUpdateBg(gpa: std.mem.Allocator, io: std.Io) void {
     const c_time = @cImport(@cInclude("time.h"));
     const now: i64 = c_time.time(null);
@@ -165,7 +158,6 @@ fn cmdCheckUpdateBg(gpa: std.mem.Allocator, io: std.Io) void {
 
 fn run(gpa: std.mem.Allocator, io: std.Io, args: []const []const u8) !void {
     const cmd = if (args.len > 0) args[0] else "";
-    // Background worker spawned by checkUpdateSilent — runs silently and exits
     if (std.mem.eql(u8, cmd, "--check-update-bg")) {
         cmdCheckUpdateBg(gpa, io);
         return;
@@ -260,7 +252,6 @@ fn cmdDoctor(gpa: std.mem.Allocator, io: std.Io) !void {
     display.print("\ncsw doctor\n\n", .{});
     var issues: usize = 0;
 
-    // ── Claude Desktop ───────────────────────────────────────────────────────
     display.print("  Claude Desktop\n  ──────────────────────────────────\n", .{});
 
     const app_exists = desktop.pathExists(gpa, "/Applications/Claude.app");
@@ -278,7 +269,6 @@ fn cmdDoctor(gpa: std.mem.Allocator, io: std.Io) !void {
         doctorWarn("Process", "not running");
     }
 
-    // ── Keychain ─────────────────────────────────────────────────────────────
     display.print("\n  Keychain\n  ──────────────────────────────────\n", .{});
 
     if (keychain.get(gpa, io, "Claude Safe Storage")) |v| {
@@ -296,7 +286,6 @@ fn cmdDoctor(gpa: std.mem.Allocator, io: std.Io) !void {
         doctorWarn("Claude Code-credentials", "missing — run: claude auth login");
     }
 
-    // ── Filesystem ───────────────────────────────────────────────────────────
     display.print("\n  Data\n  ──────────────────────────────────\n", .{});
 
     const h = try paths.home(gpa);
@@ -326,7 +315,6 @@ fn cmdDoctor(gpa: std.mem.Allocator, io: std.Io) !void {
         doctorWarn("sessionKey cookie", "absent — Desktop likely uses OAuth now (save/use still work)");
     }
 
-    // ── Profiles ─────────────────────────────────────────────────────────────
     display.print("\n  Profiles\n  ──────────────────────────────────\n", .{});
 
     const active = try profile.current(gpa);
@@ -350,7 +338,6 @@ fn cmdDoctor(gpa: std.mem.Allocator, io: std.Io) !void {
         doctorWarn("Saved profiles", "none");
     }
 
-    // ── Tools ────────────────────────────────────────────────────────────────
     display.print("\n  Tools\n  ──────────────────────────────────\n", .{});
 
     var found_picker = false;
@@ -372,7 +359,6 @@ fn cmdDoctor(gpa: std.mem.Allocator, io: std.Io) !void {
         doctorWarn("Fuzzy picker", "sk/fzf not found — install: brew install sk");
     }
 
-    // ── Summary ──────────────────────────────────────────────────────────────
     display.print("\n", .{});
     if (issues == 0) {
         display.ok("All checks passed.");
@@ -385,7 +371,6 @@ fn cmdDoctor(gpa: std.mem.Allocator, io: std.Io) !void {
 }
 
 fn cmdWhoami(gpa: std.mem.Allocator, io: std.Io) !void {
-    // ── Claude Code ──────────────────────────────────────────────────────────
     if (keychain.get(gpa, io, KEYCHAIN_CODE)) |token| {
         defer gpa.free(token);
         if (std.json.parseFromSlice(std.json.Value, gpa, token, .{})) |parsed| {
@@ -404,7 +389,6 @@ fn cmdWhoami(gpa: std.mem.Allocator, io: std.Io) !void {
         display.row("Status", "no active session");
     }
 
-    // ── Claude Desktop ───────────────────────────────────────────────────────
     if (desktop.getSessionKey(gpa, io)) |token| {
         defer gpa.free(token);
         display.section("Claude Desktop");
@@ -416,7 +400,6 @@ fn cmdWhoami(gpa: std.mem.Allocator, io: std.Io) !void {
         display.row("Status", "not running or no session found");
     }
 
-    // ── Perfis salvos ────────────────────────────────────────────────────────
     const profiles = try profile.list(gpa);
     defer {
         for (profiles) |p| gpa.free(p);
@@ -647,7 +630,6 @@ fn cmdUpdate(gpa: std.mem.Allocator, io: std.Io, verbose: bool) !void {
     );
     defer gpa.free(dl_url);
 
-    // Use /proc/self/exe on Linux or argv[0] fallback; on macOS use _NSGetExecutablePath via C
     var exe_buf: [std.fs.max_path_bytes]u8 = undefined;
     const exe_path = blk: {
         var size: u32 = @intCast(exe_buf.len);
@@ -703,9 +685,7 @@ fn cmdUpdate(gpa: std.mem.Allocator, io: std.Io, verbose: bool) !void {
     display.ok(done_msg);
 }
 
-// ── Tests ────────────────────────────────────────────────────────────────────
-
-test "token preview truncado a 15 chars" {
+test "token preview truncated to 15 chars" {
     const token = "sk-ant-oat01-ABCDEFGHIJKLMNOPQRSTUVWXYZ";
     const preview_len = @min(token.len, 15);
     const preview = try std.fmt.allocPrint(std.testing.allocator, "{s}...", .{token[0..preview_len]});
@@ -714,7 +694,7 @@ test "token preview truncado a 15 chars" {
     try std.testing.expectEqual(@as(usize, 18), preview.len);
 }
 
-test "token mais curto que 15 não entra em pânico" {
+test "token shorter than 15 does not panic" {
     const token = "short";
     const preview_len = @min(token.len, 15);
     const preview = try std.fmt.allocPrint(std.testing.allocator, "{s}...", .{token[0..preview_len]});
