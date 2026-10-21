@@ -5,6 +5,8 @@ const desktop = @import("desktop.zig");
 const display = @import("display.zig");
 const keychain = @import("keychain.zig");
 const paths = @import("paths.zig");
+const skills = @import("skills.zig");
+const plugins = @import("plugins.zig");
 
 const c = @cImport({
     @cInclude("dirent.h");
@@ -73,6 +75,24 @@ pub fn cmdUse(gpa: std.mem.Allocator, io: std.Io, name: []const u8) !void {
         display.print("❌  Profile '{s}' not found. Use: csw save {s}\n", .{ name, name });
         return error.ProfileNotFound;
     }
+
+    const shared_source = try skills.sourceForIn(gpa, h, name);
+    defer if (shared_source) |source| gpa.free(source);
+    if (shared_source) |source| {
+        const plugin_result = plugins.syncIn(gpa, io, h, source, name) catch |err| {
+            display.print("❌  Could not sync plugins into '{s}': {s}. Profile was not switched.\n", .{ name, @errorName(err) });
+            return err;
+        };
+        if (plugin_result.installed + plugin_result.updated + plugin_result.toggled > 0) {
+            display.print("Synced plugins into '{s}' ({d} installed, {d} updated, {d} enabled states matched)\n", .{ name, plugin_result.installed, plugin_result.updated, plugin_result.toggled });
+        }
+    }
+
+    const shared_count = skills.syncIn(gpa, h, name) catch |err| blk: {
+        display.print("⚠️  Could not refresh shared skills for '{s}': {s}\n", .{ name, @errorName(err) });
+        break :blk 0;
+    };
+    if (shared_count > 0) display.print("Linked {d} new local skills into '{s}'\n", .{ shared_count, name });
 
     const cur = try currentIn(gpa, h);
     defer if (cur) |cur_owned| gpa.free(cur_owned);
@@ -159,6 +179,21 @@ pub fn cmdNew(gpa: std.mem.Allocator, io: std.Io, name: []const u8) !void {
     display.info(info_msg);
 }
 
+pub fn cmdShare(gpa: std.mem.Allocator, io: std.Io, source: []const u8, target: []const u8) !void {
+    const h = try paths.home(gpa);
+    defer gpa.free(h);
+    const count = try skills.shareIn(gpa, h, source, target);
+    const plugin_result = try plugins.syncIn(gpa, io, h, source, target);
+    display.print("Sharing local skills and plugins from '{s}' to '{s}' ({d} new skill links, {d} plugins installed, {d} updated, {d} enabled states matched). Future additions sync when you switch to '{s}'.\n", .{ source, target, count, plugin_result.installed, plugin_result.updated, plugin_result.toggled, target });
+}
+
+pub fn cmdUnshare(gpa: std.mem.Allocator, target: []const u8) !void {
+    const h = try paths.home(gpa);
+    defer gpa.free(h);
+    const count = try skills.unshareIn(gpa, h, target);
+    display.print("Stopped sharing skills and plugins into '{s}' ({d} shared skill links removed). Installed plugins remain in the profile.\n", .{ target, count });
+}
+
 pub fn cmdDelete(gpa: std.mem.Allocator, io: std.Io, name_opt: ?[]const u8) !void {
     const h = try paths.home(gpa);
     defer gpa.free(h);
@@ -191,6 +226,23 @@ pub fn cmdDelete(gpa: std.mem.Allocator, io: std.Io, name_opt: ?[]const u8) !voi
     if (!desktop.pathExists(gpa, p_json) and !desktop.pathExists(gpa, p_dir)) {
         display.print("❌  Profile '{s}' not found\n", .{name});
         return error.ProfileNotFound;
+    }
+
+    const profiles = try listIn(gpa, h);
+    defer {
+        for (profiles) |p| gpa.free(p);
+        gpa.free(profiles);
+    }
+    for (profiles) |p| {
+        if (std.mem.eql(u8, p, name)) continue;
+        const source = try skills.sourceForIn(gpa, h, p);
+        defer if (source) |s| gpa.free(s);
+        if (source) |s| {
+            if (std.mem.eql(u8, s, name)) {
+                display.print("❌  Profile '{s}' supplies shared skills and plugins to '{s}'. Run `csw unshare {s}` first.\n", .{ name, p, p });
+                return error.ProfileHasSharedSkillsDependents;
+            }
+        }
     }
 
     const cj = try paths.claudeJsonIn(gpa, h);
@@ -477,7 +529,7 @@ fn ensureCurrentSavedIn(gpa: std.mem.Allocator, io: std.Io, base: []const u8) !v
     var name_buf: [256]u8 = undefined;
     var n: usize = 0;
     while (n < name_buf.len - 1) {
-        const ch_n = std.c.read(std.posix.STDIN_FILENO, name_buf[n..n+1].ptr, 1);
+        const ch_n = std.c.read(std.posix.STDIN_FILENO, name_buf[n .. n + 1].ptr, 1);
         if (ch_n <= 0) break;
         if (name_buf[n] == '\n') break;
         n += 1;
