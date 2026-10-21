@@ -121,6 +121,12 @@ csw update         Update csw to the latest release
 csw logout-all     Log out of all accounts and remove active symlinks
 ```
 
+## Linux
+
+`csw` builds and runs on Linux (x86_64 and aarch64; `install.sh` and `csw update` pick the `unknown-linux-musl` asset). Supported: `save`, `use`, `new`, `delete`, `list`, `pick`, `whoami` (Claude Code), `logout-all`, `doctor`.
+
+On Linux, Claude Code keeps its credentials in `~/.claude/.credentials.json` (mode 0600). Because `~/.claude/` is a symlink to the active profile directory, credentials switch together with the profile; csw never reads them into another store or rewrites them. Claude Desktop and Keychain features are macOS-only and report "not supported" on Linux.
+
 ## How it works
 
 ### Security model

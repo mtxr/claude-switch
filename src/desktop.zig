@@ -5,14 +5,16 @@ const crypto = @import("crypto.zig");
 const display = @import("display.zig");
 const keychain = @import("keychain.zig");
 const paths = @import("paths.zig");
+const platform = @import("platform.zig");
 
-const c = @cImport({
+const c = if (platform.supports_desktop) @cImport({
     @cInclude("sqlite3.h");
-});
+}) else struct {};
 
 const KEYCHAIN_DESKTOP = "Claude Safe Storage";
 
 pub fn isRunning(gpa: std.mem.Allocator, io: std.Io) bool {
+    if (comptime !platform.supports_desktop) return false;
     const result = std.process.run(gpa, io, .{
         .argv = &.{ "pgrep", "-x", "Claude" },
         .stdout_limit = .limited(1024),
@@ -27,6 +29,7 @@ pub fn isRunning(gpa: std.mem.Allocator, io: std.Io) bool {
 }
 
 pub fn quit(gpa: std.mem.Allocator, io: std.Io) void {
+    if (comptime !platform.supports_desktop) return;
     if (!isRunning(gpa, io)) return;
     display.info("Quitting Claude Desktop...");
     const result = std.process.run(gpa, io, .{
@@ -40,6 +43,7 @@ pub fn quit(gpa: std.mem.Allocator, io: std.Io) void {
 }
 
 pub fn launch(gpa: std.mem.Allocator, io: std.Io) void {
+    if (comptime !platform.supports_desktop) return;
     display.info("Reopening Claude Desktop...");
     const result = std.process.run(gpa, io, .{
         .argv = &.{ "open", "-a", "Claude" },
@@ -51,18 +55,24 @@ pub fn launch(gpa: std.mem.Allocator, io: std.Io) void {
 }
 
 pub fn hasData(gpa: std.mem.Allocator, name: []const u8) bool {
+    if (comptime !platform.supports_desktop) return false;
     const h = paths.home(gpa) catch return false;
     defer gpa.free(h);
     return hasDataIn(gpa, h, name);
 }
 
 pub fn swap(gpa: std.mem.Allocator, current_name: ?[]const u8, to_name: []const u8) !void {
+    if (comptime !platform.supports_desktop) return;
     const h = try paths.home(gpa);
     defer gpa.free(h);
     return swapIn(gpa, h, current_name, to_name);
 }
 
 pub fn getSessionKey(gpa: std.mem.Allocator, io: std.Io) ![]const u8 {
+    if (comptime !platform.supports_desktop) {
+        platform.notSupported("Claude Desktop session access");
+        return error.UnsupportedPlatform;
+    }
     const raw_key = keychain.get(gpa, io, KEYCHAIN_DESKTOP) catch {
         display.err("Claude Safe Storage not found in Keychain. Is Claude Desktop installed?");
         return error.KeychainNotFound;
@@ -134,6 +144,7 @@ pub fn swapIn(gpa: std.mem.Allocator, base: []const u8, current_name: ?[]const u
 }
 
 pub fn getSessionKeyWithKeyIn(gpa: std.mem.Allocator, base: []const u8, raw_key: []const u8) ![]const u8 {
+    if (comptime !platform.supports_desktop) return error.UnsupportedPlatform;
     const desktop_dir = try paths.desktopDirIn(gpa, base);
     defer gpa.free(desktop_dir);
     const cookies_path = try std.fs.path.join(gpa, &.{ desktop_dir, "Cookies" });
@@ -232,6 +243,7 @@ pub fn mkdirAllC(gpa: std.mem.Allocator, abs_path: []const u8) !void {
 }
 
 pub fn hasSessionKeyCookie(gpa: std.mem.Allocator, base: []const u8) bool {
+    if (comptime !platform.supports_desktop) return false;
     const desktop_dir = paths.desktopDirIn(gpa, base) catch return false;
     defer gpa.free(desktop_dir);
     const cookies_path = std.fs.path.join(gpa, &.{ desktop_dir, "Cookies" }) catch return false;
@@ -331,6 +343,7 @@ test "swap moves dirs correctly" {
 }
 
 test "getSessionKey decrypts cookie" {
+    if (comptime !platform.supports_desktop) return error.SkipZigTest;
     const alloc = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -349,6 +362,7 @@ test "getSessionKey decrypts cookie" {
 }
 
 test "getSessionKey finds sk-ant amid noise" {
+    if (comptime !platform.supports_desktop) return error.SkipZigTest;
     const alloc = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -364,6 +378,7 @@ test "getSessionKey finds sk-ant amid noise" {
 }
 
 test "getSessionKey fails when DB does not exist" {
+    if (comptime !platform.supports_desktop) return error.SkipZigTest;
     const alloc = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -372,6 +387,22 @@ test "getSessionKey fails when DB does not exist" {
     const base = try alloc.dupe(u8, base_buf[0..base_len]);
     defer alloc.free(base);
     try std.testing.expectError(error.CookiesDbNotFound, getSessionKeyWithKeyIn(alloc, base, "key"));
+}
+
+test "operações de Desktop são inertes sem suporte" {
+    if (platform.supports_desktop) return error.SkipZigTest;
+    const alloc = std.testing.allocator;
+    var tio = std.Io.Threaded.init(std.heap.page_allocator, .{});
+    defer tio.deinit();
+    const io = tio.io();
+    try std.testing.expect(!isRunning(alloc, io));
+    quit(alloc, io);
+    launch(alloc, io);
+    try std.testing.expect(!hasData(alloc, "work"));
+    try swap(alloc, null, "work");
+    try std.testing.expect(!hasSessionKeyCookie(alloc, "/nonexistent"));
+    try std.testing.expectError(error.UnsupportedPlatform, getSessionKey(alloc, io));
+    try std.testing.expectError(error.UnsupportedPlatform, getSessionKeyWithKeyIn(alloc, "/nonexistent", "k"));
 }
 
 fn makeCookiesDb(alloc: std.mem.Allocator, base: []const u8, raw_key: []const u8, token: []const u8) !void {
