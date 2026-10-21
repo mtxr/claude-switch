@@ -24,6 +24,8 @@ comptime {
 
 const KEYCHAIN_CODE = "Claude Code-credentials";
 const KC_PROFILE_CODE = "csw-code-";
+const DESKTOP_FLAG = "--desktop";
+const ALL_FLAG = "--all";
 const GITHUB_REPO = "mtxr/claude-switch";
 const VERSION = "0.2.6"; // x-release-please-version
 const UPDATE_CACHE_FILE = "/tmp/csw-update-cache";
@@ -136,43 +138,43 @@ fn run(gpa: std.mem.Allocator, io: std.Io, args: []const []const u8) !void {
         std.mem.eql(u8, cmd, "-v");
     if (!skip_check) checkUpdateSilent(gpa, io);
 
-    if (args.len == 0) return profile.cmdPick(gpa, io);
+    if (args.len == 0) return profile.cmdPick(gpa, io, .{});
+
+    const opts = parseOptions(args);
 
     const needsName = struct {
         fn check(a: []const []const u8, c: []const u8) ![]const u8 {
-            if (a.len < 2) {
+            return firstPositional(a) orelse {
                 display.print("❌  Usage: csw {s} <name>\n", .{c});
                 return error.MissingArg;
-            }
-            return a[1];
+            };
         }
     }.check;
 
     if (std.mem.eql(u8, cmd, "save")) {
-        return profile.cmdSave(gpa, io, try needsName(args, "save"));
+        return profile.cmdSave(gpa, io, try needsName(args, "save"), opts);
     } else if (std.mem.eql(u8, cmd, "use")) {
-        return profile.cmdUse(gpa, io, try needsName(args, "use"));
+        return profile.cmdUse(gpa, io, try needsName(args, "use"), opts);
     } else if (std.mem.eql(u8, cmd, "switch")) {
         display.info("'switch' is deprecated, use 'use' instead");
-        return profile.cmdUse(gpa, io, try needsName(args, "switch"));
+        return profile.cmdUse(gpa, io, try needsName(args, "switch"), opts);
     } else if (std.mem.eql(u8, cmd, "new")) {
-        return profile.cmdNew(gpa, io, try needsName(args, "new"));
+        return profile.cmdNew(gpa, io, try needsName(args, "new"), opts);
     } else if (std.mem.eql(u8, cmd, "delete")) {
-        const name_opt: ?[]const u8 = if (args.len >= 2) args[1] else null;
-        return profile.cmdDelete(gpa, io, name_opt);
+        return profile.cmdDelete(gpa, io, firstPositional(args), opts);
     } else if (std.mem.eql(u8, cmd, "list")) {
-        return profile.cmdList(gpa, io);
+        return profile.cmdList(gpa, io, opts);
     } else if (std.mem.eql(u8, cmd, "whoami")) {
         return cmdWhoami(gpa, io);
     } else if (std.mem.eql(u8, cmd, "pick")) {
-        return profile.cmdPick(gpa, io);
+        return profile.cmdPick(gpa, io, opts);
     } else if (std.mem.eql(u8, cmd, "doctor")) {
         return cmdDoctor(gpa, io);
     } else if (std.mem.eql(u8, cmd, "update")) {
         const verbose = args.len >= 2 and std.mem.eql(u8, args[1], "--verbose");
         return cmdUpdate(gpa, io, verbose);
     } else if (std.mem.eql(u8, cmd, "logout-all")) {
-        return profile.cmdLogoutAll(gpa, io);
+        return profile.cmdLogoutAll(gpa, io, opts);
     } else if (std.mem.eql(u8, cmd, "--version") or std.mem.eql(u8, cmd, "-v")) {
         display.print("csw {s}\n", .{VERSION});
     } else if (std.mem.eql(u8, cmd, "--help") or std.mem.eql(u8, cmd, "-h")) {
@@ -184,6 +186,27 @@ fn run(gpa: std.mem.Allocator, io: std.Io, args: []const []const u8) !void {
     }
 }
 
+fn hasFlag(args: []const []const u8, flag: []const u8) bool {
+    for (args[1..]) |arg| {
+        if (std.mem.eql(u8, arg, flag)) return true;
+    }
+    return false;
+}
+
+fn parseOptions(args: []const []const u8) profile.Options {
+    if (hasFlag(args, ALL_FLAG)) return profile.Options.both;
+    if (hasFlag(args, DESKTOP_FLAG)) return .{ .code = false, .desktop = true };
+    return .{};
+}
+
+fn firstPositional(args: []const []const u8) ?[]const u8 {
+    for (args[1..]) |arg| {
+        const is_flag = std.mem.eql(u8, arg, DESKTOP_FLAG) or std.mem.eql(u8, arg, ALL_FLAG);
+        if (!is_flag) return arg;
+    }
+    return null;
+}
+
 fn printHelp() void {
     display.print(
         \\csw — Claude account switcher
@@ -192,8 +215,8 @@ fn printHelp() void {
         \\  csw <command> [name]
         \\
         \\COMMANDS:
-        \\  save <name>      Save current sessions as a named profile
-        \\  use <name>       Switch to a saved profile
+        \\  save <name>      Save the current Claude Code session as a named profile
+        \\  use <name>       Switch Claude Code to a saved profile
         \\  new <name>       Create a new empty profile slot
         \\  delete [name]    Delete a profile
         \\  list             List all saved profiles
@@ -202,6 +225,11 @@ fn printHelp() void {
         \\  update [--verbose]  Update csw to the latest release
         \\  logout-all       Log out and remove all active symlinks
         \\  doctor           Check that everything csw needs is in order
+        \\
+        \\OPTIONS:
+        \\  --desktop        Apply save, use, new, delete, list, pick and logout-all
+        \\                   to Claude Desktop only (default: Claude Code only)
+        \\  --all            Apply them to Claude Code and Claude Desktop together
         \\
     , .{});
 }
@@ -216,8 +244,24 @@ fn doctorFail(label: []const u8, detail: []const u8) void {
     display.print("\x1b[31m  [fail]\x1b[0m {s:<32} {s}\n", .{ label, detail });
 }
 
-fn doctorMacos(gpa: std.mem.Allocator, io: std.Io, h: []const u8, issues: *usize) !void {
-    display.print("  Claude Desktop\n  ──────────────────────────────────\n", .{});
+fn doctorCode(gpa: std.mem.Allocator, io: std.Io) void {
+    display.print("  Claude Code\n  ──────────────────────────────────\n", .{});
+    const found_detail: []const u8 = if (comptime platform.supports_keychain) "found (Keychain)" else "found (~/.claude/.credentials.json)";
+    if (keychain.get(gpa, io, KEYCHAIN_CODE)) |v| {
+        gpa.free(v);
+        doctorOk("Claude Code credentials", found_detail);
+    } else |_| {
+        doctorWarn("Claude Code credentials", "missing — run: claude auth login");
+    }
+}
+
+fn doctorDesktop(gpa: std.mem.Allocator, io: std.Io, h: []const u8, issues: *usize) !void {
+    display.print("\n  Claude Desktop\n  ──────────────────────────────────\n", .{});
+
+    if (comptime !platform.supports_desktop) {
+        doctorWarn("Claude Desktop", "not supported on this OS");
+        return;
+    }
 
     const app_exists = desktop.pathExists(gpa, "/Applications/Claude.app");
     if (app_exists) {
@@ -234,8 +278,6 @@ fn doctorMacos(gpa: std.mem.Allocator, io: std.Io, h: []const u8, issues: *usize
         doctorWarn("Process", "not running");
     }
 
-    display.print("\n  Keychain\n  ──────────────────────────────────\n", .{});
-
     if (keychain.get(gpa, io, "Claude Safe Storage")) |v| {
         gpa.free(v);
         doctorOk("Claude Safe Storage", "found");
@@ -243,15 +285,6 @@ fn doctorMacos(gpa: std.mem.Allocator, io: std.Io, h: []const u8, issues: *usize
         doctorFail("Claude Safe Storage", "missing — open Claude Desktop to create it");
         issues.* += 1;
     }
-
-    if (keychain.get(gpa, io, KEYCHAIN_CODE)) |v| {
-        gpa.free(v);
-        doctorOk("Claude Code-credentials", "found");
-    } else |_| {
-        doctorWarn("Claude Code-credentials", "missing — run: claude auth login");
-    }
-
-    display.print("\n  Data\n  ──────────────────────────────────\n", .{});
 
     const desktop_dir = try paths.desktopDirIn(gpa, h);
     defer gpa.free(desktop_dir);
@@ -278,15 +311,26 @@ fn doctorMacos(gpa: std.mem.Allocator, io: std.Io, h: []const u8, issues: *usize
     }
 }
 
-fn doctorLinux(gpa: std.mem.Allocator, io: std.Io) void {
-    display.print("  Claude Code\n  ──────────────────────────────────\n", .{});
-    if (keychain.get(gpa, io, KEYCHAIN_CODE)) |v| {
-        gpa.free(v);
-        doctorOk("Claude Code credentials", "found (~/.claude/.credentials.json)");
-    } else |_| {
-        doctorWarn("Claude Code credentials", "missing — run: claude auth login");
+fn doctorDesktopOwner(gpa: std.mem.Allocator, h: []const u8, active: ?[]const u8, profiles: []const []const u8) !void {
+    const owner = (try desktop.ownerIn(gpa, h)) orelse {
+        doctorWarn("Desktop profile", "unassigned — run: csw save <name> --desktop");
+        return;
+    };
+    defer gpa.free(owner);
+
+    var known = false;
+    for (profiles) |p| known = known or std.mem.eql(u8, p, owner);
+    if (!known) {
+        const detail = try std.fmt.allocPrint(gpa, "'{s}' no longer exists — run: csw save <name> --desktop", .{owner});
+        defer gpa.free(detail);
+        doctorWarn("Desktop profile", detail);
+        return;
     }
-    doctorWarn("Claude Desktop", "not supported on this OS");
+
+    const same = active != null and std.mem.eql(u8, owner, active.?);
+    const detail = if (same) try gpa.dupe(u8, owner) else try std.fmt.allocPrint(gpa, "{s} (Code is on {s})", .{ owner, active orelse "none" });
+    defer gpa.free(detail);
+    doctorOk("Desktop profile", detail);
 }
 
 fn cmdDoctor(gpa: std.mem.Allocator, io: std.Io) !void {
@@ -296,11 +340,8 @@ fn cmdDoctor(gpa: std.mem.Allocator, io: std.Io) !void {
     const h = try paths.home(gpa);
     defer gpa.free(h);
 
-    if (comptime platform.supports_desktop) {
-        try doctorMacos(gpa, io, h, &issues);
-    } else {
-        doctorLinux(gpa, io);
-    }
+    doctorCode(gpa, io);
+    try doctorDesktop(gpa, io, h, &issues);
 
     display.print("\n  Profiles\n  ──────────────────────────────────\n", .{});
 
@@ -324,6 +365,7 @@ fn cmdDoctor(gpa: std.mem.Allocator, io: std.Io) !void {
     } else {
         doctorWarn("Saved profiles", "none");
     }
+    if (comptime platform.supports_desktop) try doctorDesktopOwner(gpa, h, active, profiles);
 
     display.print("\n  Tools\n  ──────────────────────────────────\n", .{});
 
@@ -374,18 +416,24 @@ fn cmdWhoami(gpa: std.mem.Allocator, io: std.Io) !void {
         display.row("Status", "no active session");
     }
 
+    const h = try paths.home(gpa);
+    defer gpa.free(h);
+    const desktop_owner = try desktop.ownerIn(gpa, h);
+    defer if (desktop_owner) |o| gpa.free(o);
+
+    display.section("Claude Desktop");
     if (comptime !platform.supports_desktop) {
-        display.section("Claude Desktop");
         display.row("Status", "not supported on this OS");
-    } else if (desktop.getSessionKey(gpa, io)) |token| {
-        defer gpa.free(token);
-        display.section("Claude Desktop");
-        display.row("Token type", "sessionKey (sk-ant-sid)");
-        display.row("Status", "sessionKey found");
-        display.row("Storage", "Electron cookie (AES encrypted)");
-    } else |_| {
-        display.section("Claude Desktop");
-        display.row("Status", "not running or no session found");
+    } else {
+        display.row("Profile", desktop_owner orelse "unassigned");
+        if (desktop.getSessionKey(gpa, io)) |token| {
+            defer gpa.free(token);
+            display.row("Token type", "sessionKey (sk-ant-sid)");
+            display.row("Status", "sessionKey found");
+            display.row("Storage", "Electron cookie (AES encrypted)");
+        } else |_| {
+            display.row("Status", "not running or no session found");
+        }
     }
 
     const profiles = try profile.list(gpa);
@@ -402,7 +450,8 @@ fn cmdWhoami(gpa: std.mem.Allocator, io: std.Io) !void {
 
         for (profiles) |p| {
             const is_active = if (active) |a| std.mem.eql(u8, p, a) else false;
-            const marker: []const u8 = if (is_active) "  ◀  active" else "";
+            const is_desktop = desktop_owner != null and std.mem.eql(u8, p, desktop_owner.?);
+            const marker = profile.listMarker(is_active, is_desktop, profile.Options.both);
 
             const svc = try std.fmt.allocPrint(gpa, "{s}{s}", .{ KC_PROFILE_CODE, p });
             defer gpa.free(svc);
@@ -610,4 +659,30 @@ fn cmdUpdate(gpa: std.mem.Allocator, io: std.Io, verbose: bool) !void {
     const done_msg = try std.fmt.allocPrint(gpa, "Updated to v{s}", .{latest});
     defer gpa.free(done_msg);
     display.ok(done_msg);
+}
+
+test "hasFlag finds --desktop after the command only" {
+    try std.testing.expect(hasFlag(&.{ "use", "work", "--desktop" }, DESKTOP_FLAG));
+    try std.testing.expect(hasFlag(&.{ "use", "--desktop", "work" }, DESKTOP_FLAG));
+    try std.testing.expect(!hasFlag(&.{ "use", "work" }, DESKTOP_FLAG));
+    try std.testing.expect(!hasFlag(&.{"--desktop"}, DESKTOP_FLAG));
+}
+
+test "parseOptions selects the products" {
+    const code = parseOptions(&.{ "use", "work" });
+    try std.testing.expect(code.code and !code.desktop);
+    const desk = parseOptions(&.{ "use", "work", "--desktop" });
+    try std.testing.expect(!desk.code and desk.desktop);
+    const both = parseOptions(&.{ "use", "--all", "work" });
+    try std.testing.expect(both.code and both.desktop);
+    const all_wins = parseOptions(&.{ "use", "--desktop", "--all" });
+    try std.testing.expect(all_wins.code and all_wins.desktop);
+}
+
+test "firstPositional skips the desktop flag" {
+    try std.testing.expectEqualStrings("work", firstPositional(&.{ "use", "--desktop", "work" }).?);
+    try std.testing.expectEqualStrings("work", firstPositional(&.{ "use", "work", "--desktop" }).?);
+    try std.testing.expectEqualStrings("work", firstPositional(&.{ "use", "--all", "work" }).?);
+    try std.testing.expect(firstPositional(&.{ "delete", "--desktop" }) == null);
+    try std.testing.expect(firstPositional(&.{"list"}) == null);
 }

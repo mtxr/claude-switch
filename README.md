@@ -1,6 +1,6 @@
 # claude-switch
 
-Swap between Claude accounts (Code + Desktop) on macOS with a single command.
+Swap between Claude Code accounts on macOS and Linux with a single command. Claude Desktop (macOS) is selected with `--desktop` or `--all`.
 
 **Fully offline. Zero storage.** No tokens are sent anywhere and nothing is written to disk by csw. All credentials live exclusively in macOS Keychain — the same encrypted, hardware-backed store that Claude itself uses. No config files, no dotfiles, no plaintext secrets.
 
@@ -110,8 +110,8 @@ csw pick
 ## Usage
 
 ```
-csw save <name>    Save current sessions (Code + Desktop) as a named profile
-csw use <name>     Switch to a saved profile
+csw save <name>    Save the current Claude Code session as a named profile
+csw use <name>     Switch Claude Code to a saved profile
 csw new <name>     Create a new empty profile slot (then: claude auth login)
 csw delete <name>  Delete a profile and its data
 csw list           List all saved profiles
@@ -144,8 +144,33 @@ csw does not create any files or directories of its own. All session tokens are 
 
 - No network requests are ever made.
 - No plaintext tokens ever touch the filesystem.
-- Both Claude Code and Claude Desktop are optional — csw works with either or both.
-- On switch, Claude Desktop is quit automatically and relaunched.
+- Claude Code is the default. Claude Desktop is only touched when you pass `--desktop` or `--all`, and is then quit and relaunched where a swap is needed.
+
+### Claude Desktop (`--desktop`, `--all`)
+
+Code and Desktop keep independent state, so a profile can be on one account in Claude Code and another in Claude Desktop. The mutating commands (`save`, `use`, `new`, `delete`, `list`, `pick`, `logout-all`) choose what they act on:
+
+| Flag | Acts on |
+|---|---|
+| none | Claude Code only |
+| `--desktop` | Claude Desktop only |
+| `--all` | Claude Code and Claude Desktop together |
+
+What each command does for Desktop:
+
+| Command | Desktop effect |
+|---|---|
+| `csw save <name> --desktop` | Assigns the Desktop data dir to the profile (if it has no owner yet). |
+| `csw use <name> --desktop` | Quits Desktop, swaps the data dirs and reopens it. Claude Code stays where it is. |
+| `csw new <name> --desktop` | Creates the profile and swaps Desktop to an empty data dir to log in. |
+| `csw delete <name> --desktop` | Removes `Claude.<name>/` and clears the Desktop owner if it was that profile. Without the flag the Desktop data is kept. |
+| `csw list --desktop` | Marks only the Desktop profile (`--all` marks `◀ code` and `◀ desktop`). |
+| `csw pick --desktop` | `use --desktop` for the chosen profile. |
+| `csw logout-all --desktop` | Quits Desktop and removes the legacy Desktop symlink. |
+
+`csw whoami` and `csw doctor` are read-only and always report both products, including which profile owns the Desktop data dir (and warn when it is unassigned or points at a deleted profile).
+
+csw records the owner of the main Desktop data dir in `Claude/.csw-profile`; the marker travels with the dir when it is renamed. Installs that predate the marker are assigned to the active Code profile the first time `use` or `new` runs, which matches how older versions always switched both together.
 
 ### Profile switching
 

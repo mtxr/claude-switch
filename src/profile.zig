@@ -16,6 +16,15 @@ const c = @cImport({
 const KEYCHAIN_CODE = "Claude Code-credentials";
 const KC_PROFILE_CODE = "csw-code-";
 
+/// Which products a command acts on. Claude Code is the default; `--desktop`
+/// selects Claude Desktop only and `--all` selects both.
+pub const Options = struct {
+    code: bool = true,
+    desktop: bool = false,
+
+    pub const both: Options = .{ .code = true, .desktop = true };
+};
+
 
 pub fn list(gpa: std.mem.Allocator) ![]const []const u8 {
     const h = try paths.home(gpa);
@@ -35,10 +44,24 @@ pub fn profileJsonEmail(gpa: std.mem.Allocator, name: []const u8) !?[]const u8 {
     return profileJsonEmailIn(gpa, h, name);
 }
 
-pub fn cmdSave(gpa: std.mem.Allocator, io: std.Io, name: []const u8) !void {
+pub fn cmdSave(gpa: std.mem.Allocator, io: std.Io, name: []const u8, opts: Options) !void {
     const h = try paths.home(gpa);
     defer gpa.free(h);
 
+    if (!opts.code) try requireProfileIn(gpa, h, name);
+    if (opts.code) try saveCodeIn(gpa, io, h, name);
+    if (opts.desktop) try saveDesktopIn(gpa, h, name);
+}
+
+fn requireProfileIn(gpa: std.mem.Allocator, base: []const u8, name: []const u8) !void {
+    const p_json = try paths.profileJsonIn(gpa, base, name);
+    defer gpa.free(p_json);
+    if (desktop.pathExists(gpa, p_json)) return;
+    display.print("❌  Profile '{s}' not found. Use: csw save {s}\n", .{ name, name });
+    return error.ProfileNotFound;
+}
+
+fn saveCodeIn(gpa: std.mem.Allocator, io: std.Io, h: []const u8, name: []const u8) !void {
     var c_token: ?[]const u8 = null;
     var c_acct: []const u8 = "";
     if (comptime platform.supports_keychain) {
@@ -66,26 +89,49 @@ pub fn cmdSave(gpa: std.mem.Allocator, io: std.Io, name: []const u8) !void {
     display.ok(msg);
 }
 
-pub fn cmdUse(gpa: std.mem.Allocator, io: std.Io, name: []const u8) !void {
+fn saveDesktopIn(gpa: std.mem.Allocator, base: []const u8, name: []const u8) !void {
+    try desktop.migrateIn(gpa, base);
+    if (try desktop.adoptOwnerIn(gpa, base, name)) {
+        const msg = try std.fmt.allocPrint(gpa, "Claude Desktop data assigned to '{s}'", .{name});
+        defer gpa.free(msg);
+        display.ok(msg);
+        return;
+    }
+    const owner = (try desktop.ownerIn(gpa, base)) orelse {
+        display.info("No Claude Desktop data found to assign");
+        return;
+    };
+    defer gpa.free(owner);
+    const same = std.mem.eql(u8, owner, name);
+    const msg = if (same)
+        try std.fmt.allocPrint(gpa, "Claude Desktop data is already assigned to '{s}'", .{name})
+    else
+        try std.fmt.allocPrint(gpa, "Claude Desktop belongs to '{s}'; use: csw use {s} --desktop", .{ owner, name });
+    defer gpa.free(msg);
+    if (same) display.ok(msg) else display.info(msg);
+}
+
+pub fn cmdUse(gpa: std.mem.Allocator, io: std.Io, name: []const u8, opts: Options) !void {
     const h = try paths.home(gpa);
     defer gpa.free(h);
 
-    const p_json = try paths.profileJsonIn(gpa, h, name);
-    defer gpa.free(p_json);
-
-    if (!desktop.pathExists(gpa, p_json)) {
-        display.print("❌  Profile '{s}' not found. Use: csw save {s}\n", .{ name, name });
-        return error.ProfileNotFound;
-    }
+    try requireProfileIn(gpa, h, name);
 
     const cur = try currentIn(gpa, h);
     defer if (cur) |cur_owned| gpa.free(cur_owned);
+    if (cur) |c_name| _ = try desktop.adoptOwnerIn(gpa, h, c_name);
+
+    if (opts.code) try useCodeIn(gpa, io, h, name, cur);
+    if (opts.desktop) try useDesktopIn(gpa, io, h, name, cur);
+}
+
+fn useCodeIn(gpa: std.mem.Allocator, io: std.Io, h: []const u8, name: []const u8, cur: ?[]const u8) !void {
     if (cur) |c_name| {
         if (!std.mem.eql(u8, c_name, name)) {
             const msg = try std.fmt.allocPrint(gpa, "Auto-saving current profile '{s}' before switching...", .{c_name});
             defer gpa.free(msg);
             display.info(msg);
-            try cmdSave(gpa, io, c_name);
+            try saveCodeIn(gpa, io, h, c_name);
         }
     }
 
@@ -97,9 +143,6 @@ pub fn cmdUse(gpa: std.mem.Allocator, io: std.Io, name: []const u8) !void {
     const c_acct = keychain.getAccount(gpa, io, svc);
     defer gpa.free(c_acct);
 
-    desktop.quit(gpa, io);
-    const has_desktop = desktop.hasData(gpa, name);
-
     if (c_token) |token| {
         const msg = try std.fmt.allocPrint(gpa, "Switching Claude Code → {s}", .{name});
         defer gpa.free(msg);
@@ -108,15 +151,25 @@ pub fn cmdUse(gpa: std.mem.Allocator, io: std.Io, name: []const u8) !void {
     }
 
     try switchLinksIn(gpa, h, name);
-    try desktop.swap(gpa, cur, name);
-    if (has_desktop) desktop.launch(gpa, io);
 
     const msg = try std.fmt.allocPrint(gpa, "Switched to '{s}'", .{name});
     defer gpa.free(msg);
     display.ok(msg);
 }
 
-pub fn cmdNew(gpa: std.mem.Allocator, io: std.Io, name: []const u8) !void {
+fn useDesktopIn(gpa: std.mem.Allocator, io: std.Io, h: []const u8, name: []const u8, cur: ?[]const u8) !void {
+    desktop.quit(gpa, io);
+    const has_desktop = desktop.hasData(gpa, name);
+    try desktop.swap(gpa, cur, name);
+    if (has_desktop) desktop.launch(gpa, io);
+
+    const msg = try std.fmt.allocPrint(gpa, "Claude Desktop switched to '{s}'", .{name});
+    defer gpa.free(msg);
+    display.ok(msg);
+    _ = h;
+}
+
+pub fn cmdNew(gpa: std.mem.Allocator, io: std.Io, name: []const u8, opts: Options) !void {
     const h = try paths.home(gpa);
     defer gpa.free(h);
 
@@ -130,8 +183,10 @@ pub fn cmdNew(gpa: std.mem.Allocator, io: std.Io, name: []const u8) !void {
         return error.ProfileAlreadyExists;
     }
 
-    try ensureCurrentSavedIn(gpa, io, h);
-    desktop.quit(gpa, io);
+    if (opts.code) try ensureCurrentSavedIn(gpa, io, h);
+    const previous = try currentIn(gpa, h);
+    defer if (previous) |p| gpa.free(p);
+    if (previous) |p| _ = try desktop.adoptOwnerIn(gpa, h, p);
 
     {
         const p_json_z = try gpa.dupeZ(u8, p_json);
@@ -141,29 +196,46 @@ pub fn cmdNew(gpa: std.mem.Allocator, io: std.Io, name: []const u8) !void {
         _ = std.c.write(fd, "{}", 2);
         _ = std.c.close(fd);
     }
-
     try desktop.mkdirAllC(gpa, p_dir);
-    keychain.delete(gpa, io, KEYCHAIN_CODE) catch {};
 
-    const cur_name = try currentIn(gpa, h);
-    defer if (cur_name) |cn| gpa.free(cn);
+    if (opts.code) {
+        keychain.delete(gpa, io, KEYCHAIN_CODE) catch {};
+        try switchLinksIn(gpa, h, name);
+    }
+    if (opts.desktop) {
+        desktop.quit(gpa, io);
+        try desktop.swap(gpa, previous, name);
+    }
 
-    try switchLinksIn(gpa, h, name);
-    try desktop.swap(gpa, cur_name, name);
-
-    const ok_msg = try std.fmt.allocPrint(gpa, "Profile '{s}' created and activated.", .{name});
+    const ok_msg = if (opts.code)
+        try std.fmt.allocPrint(gpa, "Profile '{s}' created and activated.", .{name})
+    else
+        try std.fmt.allocPrint(gpa, "Profile '{s}' created; Claude Desktop is on it.", .{name});
     defer gpa.free(ok_msg);
     display.ok(ok_msg);
+
+    const login_hint: []const u8 = if (opts.code and opts.desktop)
+        "`claude auth login` and log in on Claude Desktop"
+    else if (opts.code)
+        "`claude auth login`"
+    else
+        "log in on Claude Desktop";
     const info_msg = try std.fmt.allocPrint(
         gpa,
-        "Now run: `claude auth login` and/or login on Claude Desktop\n  When you are done, run: `csw save {s}`\n",
-        .{name},
+        "Now run: {s}\n  When you are done, run: `csw save {s}{s}`\n",
+        .{ login_hint, name, flagSuffix(opts) },
     );
     defer gpa.free(info_msg);
     display.info(info_msg);
 }
 
-pub fn cmdDelete(gpa: std.mem.Allocator, io: std.Io, name_opt: ?[]const u8) !void {
+pub fn flagSuffix(opts: Options) []const u8 {
+    if (opts.code and opts.desktop) return " --all";
+    if (opts.desktop) return " --desktop";
+    return "";
+}
+
+pub fn cmdDelete(gpa: std.mem.Allocator, io: std.Io, name_opt: ?[]const u8, opts: Options) !void {
     const h = try paths.home(gpa);
     defer gpa.free(h);
 
@@ -192,11 +264,32 @@ pub fn cmdDelete(gpa: std.mem.Allocator, io: std.Io, name_opt: ?[]const u8) !voi
     const d_dir = try paths.desktopProfileDirIn(gpa, h, name);
     defer gpa.free(d_dir);
 
-    if (!desktop.pathExists(gpa, p_json) and !desktop.pathExists(gpa, p_dir)) {
+    const desktop_owner = try desktop.ownerIn(gpa, h);
+    defer if (desktop_owner) |o| gpa.free(o);
+    const owns_desktop = desktop_owner != null and std.mem.eql(u8, desktop_owner.?, name);
+
+    const has_code = desktop.pathExists(gpa, p_json) or desktop.pathExists(gpa, p_dir);
+    const has_desktop = desktop.pathExists(gpa, d_dir) or owns_desktop;
+    if (!(opts.code and has_code) and !(opts.desktop and has_desktop)) {
         display.print("❌  Profile '{s}' not found\n", .{name});
         return error.ProfileNotFound;
     }
 
+    if (opts.code) try deleteCodeIn(gpa, io, h, name, p_json, p_dir);
+    if (opts.desktop) try deleteDesktopIn(gpa, io, h, d_dir, owns_desktop);
+    if (!opts.desktop and desktop.pathExists(gpa, d_dir)) {
+        display.info("Claude Desktop data kept; use --desktop to remove it");
+    }
+
+    const msg = if (opts.code)
+        try std.fmt.allocPrint(gpa, "Profile '{s}' deleted", .{name})
+    else
+        try std.fmt.allocPrint(gpa, "Claude Desktop data for '{s}' removed", .{name});
+    defer gpa.free(msg);
+    display.ok(msg);
+}
+
+fn deleteCodeIn(gpa: std.mem.Allocator, io: std.Io, h: []const u8, name: []const u8, p_json: []const u8, p_dir: []const u8) !void {
     const cj = try paths.claudeJsonIn(gpa, h);
     defer gpa.free(cj);
 
@@ -207,15 +300,10 @@ pub fn cmdDelete(gpa: std.mem.Allocator, io: std.Io, name_opt: ?[]const u8) !voi
     };
 
     if (is_active) {
-        desktop.quit(gpa, io);
         keychain.delete(gpa, io, KEYCHAIN_CODE) catch {};
-        const links = [_][]const u8{
-            try paths.claudeJsonIn(gpa, h),
-            try paths.claudeDirIn(gpa, h),
-            try paths.desktopDirIn(gpa, h),
-        };
-        defer for (links) |l| gpa.free(l);
-        for (links) |l| {
+        const cd = try paths.claudeDirIn(gpa, h);
+        defer gpa.free(cd);
+        for ([_][]const u8{ cj, cd }) |l| {
             if (desktop.isSymlink(gpa, l)) desktop.deletePathC(gpa, l);
         }
     }
@@ -226,17 +314,21 @@ pub fn cmdDelete(gpa: std.mem.Allocator, io: std.Io, name_opt: ?[]const u8) !voi
 
     if (desktop.pathExists(gpa, p_json)) desktop.deletePathC(gpa, p_json);
     if (desktop.pathExists(gpa, p_dir)) try deleteTreeC(gpa, io, p_dir);
-    if (desktop.pathExists(gpa, d_dir)) try deleteTreeC(gpa, io, d_dir);
-
-    const msg = try std.fmt.allocPrint(gpa, "Profile '{s}' deleted", .{name});
-    defer gpa.free(msg);
-    display.ok(msg);
 }
 
-pub fn cmdList(gpa: std.mem.Allocator, io: std.Io) !void {
+fn deleteDesktopIn(gpa: std.mem.Allocator, io: std.Io, h: []const u8, d_dir: []const u8, owns_desktop: bool) !void {
+    if (owns_desktop) desktop.quit(gpa, io);
+    const dd = try paths.desktopDirIn(gpa, h);
+    defer gpa.free(dd);
+    if (desktop.isSymlink(gpa, dd)) desktop.deletePathC(gpa, dd);
+    if (owns_desktop) desktop.clearOwnerIn(gpa, h);
+    if (desktop.pathExists(gpa, d_dir)) try deleteTreeC(gpa, io, d_dir);
+}
+
+pub fn cmdList(gpa: std.mem.Allocator, io: std.Io, opts: Options) !void {
     const h = try paths.home(gpa);
     defer gpa.free(h);
-    try ensureCurrentSavedIn(gpa, io, h);
+    if (opts.code) try ensureCurrentSavedIn(gpa, io, h);
 
     const profiles = try listIn(gpa, h);
     defer {
@@ -251,14 +343,27 @@ pub fn cmdList(gpa: std.mem.Allocator, io: std.Io) !void {
 
     const active = try currentIn(gpa, h);
     defer if (active) |a| gpa.free(a);
+    const desktop_owner = try desktop.ownerIn(gpa, h);
+    defer if (desktop_owner) |o| gpa.free(o);
 
     for (profiles) |p| {
-        const marker: []const u8 = if (active != null and std.mem.eql(u8, p, active.?)) "  ◀" else "";
-        display.print("  • {s}{s}\n", .{ p, marker });
+        const is_code = active != null and std.mem.eql(u8, p, active.?);
+        const is_desktop = desktop_owner != null and std.mem.eql(u8, p, desktop_owner.?);
+        display.print("  • {s}{s}\n", .{ p, listMarker(is_code, is_desktop, opts) });
     }
 }
 
-pub fn cmdPick(gpa: std.mem.Allocator, io: std.Io) !void {
+pub fn listMarker(is_code: bool, is_desktop: bool, show: Options) []const u8 {
+    const code = show.code and is_code;
+    const desk = show.desktop and is_desktop;
+    if (!(show.code and show.desktop)) return if (code or desk) "  ◀" else "";
+    if (code and desk) return "  ◀ code, desktop";
+    if (code) return "  ◀ code";
+    if (desk) return "  ◀ desktop";
+    return "";
+}
+
+pub fn cmdPick(gpa: std.mem.Allocator, io: std.Io, opts: Options) !void {
     const h = try paths.home(gpa);
     defer gpa.free(h);
 
@@ -275,17 +380,19 @@ pub fn cmdPick(gpa: std.mem.Allocator, io: std.Io) !void {
 
     if (try fuzzyPick(gpa, io, h, profiles, "Pick profile > ")) |chosen| {
         defer gpa.free(chosen);
-        try cmdUse(gpa, io, chosen);
+        try cmdUse(gpa, io, chosen, opts);
     }
 }
 
-pub fn cmdLogoutAll(gpa: std.mem.Allocator, io: std.Io) !void {
+pub fn cmdLogoutAll(gpa: std.mem.Allocator, io: std.Io, opts: Options) !void {
     const h = try paths.home(gpa);
     defer gpa.free(h);
 
-    if (comptime platform.supports_keychain) display.info("Removing Claude Code keychain entry...");
-    keychain.delete(gpa, io, KEYCHAIN_CODE) catch {};
-    desktop.quit(gpa, io);
+    if (opts.code) {
+        if (comptime platform.supports_keychain) display.info("Removing Claude Code keychain entry...");
+        keychain.delete(gpa, io, KEYCHAIN_CODE) catch {};
+    }
+    if (opts.desktop) desktop.quit(gpa, io);
 
     const links = [_][]const u8{
         try paths.claudeJsonIn(gpa, h),
@@ -294,15 +401,20 @@ pub fn cmdLogoutAll(gpa: std.mem.Allocator, io: std.Io) !void {
     };
     defer for (links) |l| gpa.free(l);
 
-    for (links) |l| {
-        if (desktop.isSymlink(gpa, l)) {
+    const selected = [_]bool{ opts.code, opts.code, opts.desktop };
+    for (links, selected) |l, on| {
+        if (on and desktop.isSymlink(gpa, l)) {
             const msg = try std.fmt.allocPrint(gpa, "Removing symlink {s}", .{l});
             defer gpa.free(msg);
             display.info(msg);
             desktop.deletePathC(gpa, l);
         }
     }
-    display.ok("Logged out of all accounts. Symlinks removed.");
+    if (opts.code) {
+        display.ok("Logged out of all accounts. Symlinks removed.");
+    } else {
+        display.ok("Claude Desktop closed.");
+    }
 }
 
 
@@ -454,7 +566,6 @@ pub fn migrateToProfileIn(gpa: std.mem.Allocator, io: std.Io, base: []const u8, 
         if (std.c.symlink(pd_z, cd_z) != 0) return error.SymlinkFailed;
     }
 
-    try desktop.migrateIn(gpa, base);
     _ = io;
 }
 
@@ -479,7 +590,7 @@ fn ensureCurrentSavedIn(gpa: std.mem.Allocator, io: std.Io, base: []const u8) !v
         n += 1;
     }
     const line = std.mem.trim(u8, name_buf[0..n], " \t\r");
-    if (line.len > 0) try cmdSave(gpa, io, line);
+    if (line.len > 0) try cmdSave(gpa, io, line, .{});
 }
 
 /// Picker lines: aligned name + tab + email (if any). Caller frees.
@@ -1029,23 +1140,23 @@ test "full command flow in a temporary HOME (without Desktop only)" {
     const home_guard = try FlowHome.enter(alloc, td.base);
     defer home_guard.leave(alloc);
 
-    try std.testing.expectError(error.NoProfiles, cmdPick(alloc, io));
-    try std.testing.expectError(error.NoProfiles, cmdDelete(alloc, io, null));
-    try cmdList(alloc, io);
+    try std.testing.expectError(error.NoProfiles, cmdPick(alloc, io, .{}));
+    try std.testing.expectError(error.NoProfiles, cmdDelete(alloc, io, null, .{}));
+    try cmdList(alloc, io, .{});
 
     try td.write(alloc, ".claude.json", "{\"oauthAccount\":{\"emailAddress\":\"me@work.com\"}}");
     try td.mkdir(alloc, ".claude");
     try td.write(alloc, ".claude/.credentials.json", "{\"claudeAiOauth\":{\"subscriptionType\":\"max\"}}");
 
-    try cmdSave(alloc, io, "work");
+    try cmdSave(alloc, io, "work", .{});
     {
         const active = try current(alloc);
         defer if (active) |a| alloc.free(a);
         try std.testing.expectEqualStrings("work", active.?);
     }
 
-    try std.testing.expectError(error.ProfileAlreadyExists, cmdNew(alloc, io, "work"));
-    try cmdNew(alloc, io, "personal");
+    try std.testing.expectError(error.ProfileAlreadyExists, cmdNew(alloc, io, "work", .{}));
+    try cmdNew(alloc, io, "personal", .{});
     {
         const active = try current(alloc);
         defer if (active) |a| alloc.free(a);
@@ -1053,7 +1164,7 @@ test "full command flow in a temporary HOME (without Desktop only)" {
     }
     try std.testing.expectError(error.KeychainNotFound, keychain.get(alloc, io, KEYCHAIN_CODE));
 
-    try cmdUse(alloc, io, "work");
+    try cmdUse(alloc, io, "work", .{});
     {
         const active = try current(alloc);
         defer if (active) |a| alloc.free(a);
@@ -1063,8 +1174,8 @@ test "full command flow in a temporary HOME (without Desktop only)" {
     defer alloc.free(credentials);
     try std.testing.expect(std.mem.indexOf(u8, credentials, "max") != null);
 
-    try std.testing.expectError(error.ProfileNotFound, cmdUse(alloc, io, "ghost"));
-    try std.testing.expectError(error.ProfileNotFound, cmdDelete(alloc, io, "ghost"));
+    try std.testing.expectError(error.ProfileNotFound, cmdUse(alloc, io, "ghost", .{}));
+    try std.testing.expectError(error.ProfileNotFound, cmdDelete(alloc, io, "ghost", .{}));
 
     const names = try list(alloc);
     defer {
@@ -1076,13 +1187,13 @@ test "full command flow in a temporary HOME (without Desktop only)" {
     defer if (email) |e| alloc.free(e);
     try std.testing.expectEqualStrings("me@work.com", email.?);
 
-    try cmdList(alloc, io);
+    try cmdList(alloc, io, .{});
 
-    try cmdDelete(alloc, io, "personal");
+    try cmdDelete(alloc, io, "personal", .{});
     try std.testing.expect(!try td.exists(alloc, ".claude.personal.json"));
     try std.testing.expect(!try td.exists(alloc, ".claude.personal"));
 
-    try cmdDelete(alloc, io, "work");
+    try cmdDelete(alloc, io, "work", .{});
     try std.testing.expect(!try td.exists(alloc, ".claude.work.json"));
     var buf: [std.fs.max_path_bytes]u8 = undefined;
     try std.testing.expectEqual(@as(?[]const u8, null), try td.linkTarget(alloc, ".claude.json", &buf));
@@ -1102,10 +1213,27 @@ test "logout-all removes active symlinks (without Desktop only)" {
 
     try td.write(alloc, ".claude.json", "{}");
     try td.mkdir(alloc, ".claude");
-    try cmdSave(alloc, io, "work");
-    try cmdLogoutAll(alloc, io);
+    try cmdSave(alloc, io, "work", .{});
+    try cmdLogoutAll(alloc, io, .{});
 
     var buf: [std.fs.max_path_bytes]u8 = undefined;
     try std.testing.expectEqual(@as(?[]const u8, null), try td.linkTarget(alloc, ".claude.json", &buf));
     try std.testing.expect(try td.exists(alloc, ".claude.work.json"));
+}
+
+test "listMarker follows the selected products" {
+    try std.testing.expectEqualStrings("  ◀", listMarker(true, true, .{}));
+    try std.testing.expectEqualStrings("", listMarker(false, true, .{}));
+    try std.testing.expectEqualStrings("  ◀", listMarker(true, true, .{ .code = false, .desktop = true }));
+    try std.testing.expectEqualStrings("", listMarker(true, false, .{ .code = false, .desktop = true }));
+    try std.testing.expectEqualStrings("  ◀ code, desktop", listMarker(true, true, Options.both));
+    try std.testing.expectEqualStrings("  ◀ code", listMarker(true, false, Options.both));
+    try std.testing.expectEqualStrings("  ◀ desktop", listMarker(false, true, Options.both));
+    try std.testing.expectEqualStrings("", listMarker(false, false, Options.both));
+}
+
+test "flagSuffix names the flag that reproduces the selection" {
+    try std.testing.expectEqualStrings("", flagSuffix(.{}));
+    try std.testing.expectEqualStrings(" --desktop", flagSuffix(.{ .code = false, .desktop = true }));
+    try std.testing.expectEqualStrings(" --all", flagSuffix(Options.both));
 }
