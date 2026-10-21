@@ -15,7 +15,7 @@ const PROFILE_SERVICE_PREFIX = "csw-code-";
 const CREDENTIALS_FILE = ".credentials.json";
 const MAX_CREDENTIALS_BYTES = 64 * 1024;
 
-/// Mapeia o nome de serviço do Keychain para o arquivo de credenciais equivalente no Linux.
+/// Maps a Keychain service name to the equivalent credentials file on Linux.
 pub fn credentialsPathIn(gpa: std.mem.Allocator, base: []const u8, service: []const u8) !?[]const u8 {
     const dir = if (std.mem.eql(u8, service, CODE_SERVICE))
         try paths.claudeDirIn(gpa, base)
@@ -218,7 +218,7 @@ fn writeCredentials(alloc: std.mem.Allocator, dir: []const u8, content: []const 
     _ = std.c.close(fd);
 }
 
-test "credentialsPathIn mapeia serviço ativo e de perfil" {
+test "credentialsPathIn maps active and profile services" {
     const alloc = std.testing.allocator;
     const active = (try credentialsPathIn(alloc, "/h", CODE_SERVICE)).?;
     defer alloc.free(active);
@@ -229,13 +229,13 @@ test "credentialsPathIn mapeia serviço ativo e de perfil" {
     try std.testing.expectEqualStrings("/h/.claude.work/.credentials.json", saved);
 }
 
-test "credentialsPathIn rejeita serviços desconhecidos" {
+test "credentialsPathIn rejects unknown services" {
     const alloc = std.testing.allocator;
     try std.testing.expectEqual(@as(?[]const u8, null), try credentialsPathIn(alloc, "/h", "Claude Safe Storage"));
     try std.testing.expectEqual(@as(?[]const u8, null), try credentialsPathIn(alloc, "/h", "csw-code-"));
 }
 
-test "fileGetIn lê credenciais do perfil ativo" {
+test "fileGetIn reads active profile credentials" {
     const alloc = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -251,7 +251,7 @@ test "fileGetIn lê credenciais do perfil ativo" {
     try std.testing.expectEqualStrings("{\"claudeAiOauth\":{}}", value);
 }
 
-test "fileGetIn lê credenciais de perfil salvo" {
+test "fileGetIn reads saved profile credentials" {
     const alloc = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -267,7 +267,7 @@ test "fileGetIn lê credenciais de perfil salvo" {
     try std.testing.expectEqualStrings("{\"a\":1}", value);
 }
 
-test "fileGetIn falha sem arquivo, vazio ou serviço desconhecido" {
+test "fileGetIn fails on missing file, empty file or unknown service" {
     const alloc = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -283,7 +283,7 @@ test "fileGetIn falha sem arquivo, vazio ou serviço desconhecido" {
     try std.testing.expectError(error.KeychainNotFound, fileGetIn(alloc, base, CODE_SERVICE));
 }
 
-test "fileGetIn segue o symlink do perfil ativo" {
+test "fileGetIn follows the active profile symlink" {
     const alloc = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -307,7 +307,7 @@ test "fileGetIn segue o symlink do perfil ativo" {
     try std.testing.expectEqualStrings("{\"w\":true}", value);
 }
 
-test "plataforma sem keychain recusa escrita e remoção" {
+test "platform without keychain refuses writes and deletes" {
     if (platform.supports_keychain) return error.SkipZigTest;
     var tio = std.Io.Threaded.init(std.heap.page_allocator, .{});
     defer tio.deinit();

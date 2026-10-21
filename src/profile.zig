@@ -789,7 +789,7 @@ fn linkAndCurrent(alloc: std.mem.Allocator, td: TestDir, target: []const u8) !?[
     return currentIn(alloc, td.base);
 }
 
-test "listIn ignora arquivos que não são perfis" {
+test "listIn ignores files that are not profiles" {
     const alloc = std.testing.allocator;
     var td = try TestDir.init(alloc);
     defer td.deinit(alloc);
@@ -806,14 +806,14 @@ test "listIn ignora arquivos que não são perfis" {
     try std.testing.expectEqualStrings("ok", result[0]);
 }
 
-test "listIn retorna vazio para base inexistente" {
+test "listIn returns empty for a missing base" {
     const alloc = std.testing.allocator;
     const result = try listIn(alloc, "/nonexistent/csw-test-base");
     defer alloc.free(result);
     try std.testing.expectEqual(@as(usize, 0), result.len);
 }
 
-test "currentIn ignora symlink que não aponta para perfil" {
+test "currentIn ignores a symlink that does not point to a profile" {
     const alloc = std.testing.allocator;
     var td = try TestDir.init(alloc);
     defer td.deinit(alloc);
@@ -823,7 +823,7 @@ test "currentIn ignora symlink que não aponta para perfil" {
     try std.testing.expectEqual(@as(?[]const u8, null), try linkAndCurrent(alloc, td, target));
 }
 
-test "currentIn ignora symlink com nome de perfil vazio" {
+test "currentIn ignores a symlink with an empty profile name" {
     const alloc = std.testing.allocator;
     var td = try TestDir.init(alloc);
     defer td.deinit(alloc);
@@ -833,7 +833,7 @@ test "currentIn ignora symlink com nome de perfil vazio" {
     try std.testing.expectEqual(@as(?[]const u8, null), try linkAndCurrent(alloc, td, target));
 }
 
-test "currentIn ignora symlink com prefixo certo e sufixo errado" {
+test "currentIn ignores a symlink with the right prefix and wrong suffix" {
     const alloc = std.testing.allocator;
     var td = try TestDir.init(alloc);
     defer td.deinit(alloc);
@@ -843,7 +843,7 @@ test "currentIn ignora symlink com prefixo certo e sufixo errado" {
     try std.testing.expectEqual(@as(?[]const u8, null), try linkAndCurrent(alloc, td, target));
 }
 
-test "profileJsonEmailIn retorna null para arquivo ausente, vazio ou inválido" {
+test "profileJsonEmailIn returns null for a missing, empty or invalid file" {
     const alloc = std.testing.allocator;
     var td = try TestDir.init(alloc);
     defer td.deinit(alloc);
@@ -860,7 +860,7 @@ test "profileJsonEmailIn retorna null para arquivo ausente, vazio ou inválido" 
     try std.testing.expectEqual(@as(?[]const u8, null), try profileJsonEmailIn(alloc, td.base, "noemail"));
 }
 
-test "switchLinkIn recusa substituir arquivo real" {
+test "switchLinkIn refuses to replace a real file" {
     const alloc = std.testing.allocator;
     var td = try TestDir.init(alloc);
     defer td.deinit(alloc);
@@ -873,7 +873,7 @@ test "switchLinkIn recusa substituir arquivo real" {
     try std.testing.expectError(error.NotASymlink, switchLinkIn(alloc, link, target, false));
 }
 
-test "switchLinkIn ignora alvo ausente sem ensure_dir" {
+test "switchLinkIn skips a missing target without ensure_dir" {
     const alloc = std.testing.allocator;
     var td = try TestDir.init(alloc);
     defer td.deinit(alloc);
@@ -885,7 +885,7 @@ test "switchLinkIn ignora alvo ausente sem ensure_dir" {
     try std.testing.expect(!try td.exists(alloc, "link"));
 }
 
-test "switchLinkIn cria alvo com ensure_dir e troca symlink existente" {
+test "switchLinkIn creates the target with ensure_dir and swaps an existing symlink" {
     const alloc = std.testing.allocator;
     var td = try TestDir.init(alloc);
     defer td.deinit(alloc);
@@ -904,7 +904,7 @@ test "switchLinkIn cria alvo com ensure_dir e troca symlink existente" {
     try std.testing.expectEqualStrings(second, (try td.linkTarget(alloc, "link", &buf)).?);
 }
 
-test "switchLinksIn falha sem json ou dir do perfil" {
+test "switchLinksIn fails without the profile json or dir" {
     const alloc = std.testing.allocator;
     var td = try TestDir.init(alloc);
     defer td.deinit(alloc);
@@ -913,7 +913,7 @@ test "switchLinksIn falha sem json ou dir do perfil" {
     try std.testing.expectError(error.ProfileNotFound, switchLinksIn(alloc, td.base, "work"));
 }
 
-test "switchLinksIn aponta json e dir para o perfil" {
+test "switchLinksIn points json and dir at the profile" {
     const alloc = std.testing.allocator;
     var td = try TestDir.init(alloc);
     defer td.deinit(alloc);
@@ -928,7 +928,7 @@ test "switchLinksIn aponta json e dir para o perfil" {
     try std.testing.expect(std.mem.endsWith(u8, dir_target, ".claude.work"));
 }
 
-test "migrateToProfileIn move arquivos reais e deixa symlinks" {
+test "migrateToProfileIn moves real files and leaves symlinks" {
     const alloc = std.testing.allocator;
     var td = try TestDir.init(alloc);
     defer td.deinit(alloc);
@@ -952,7 +952,7 @@ test "migrateToProfileIn move arquivos reais e deixa symlinks" {
     try std.testing.expectEqualStrings("me@work.com", email.?);
 }
 
-test "migrateToProfileIn é idempotente quando já há symlinks" {
+test "migrateToProfileIn is idempotent when symlinks already exist" {
     const alloc = std.testing.allocator;
     var td = try TestDir.init(alloc);
     defer td.deinit(alloc);
@@ -972,7 +972,7 @@ test "migrateToProfileIn é idempotente quando já há symlinks" {
     try std.testing.expectEqual(@as(usize, 1), result.len);
 }
 
-test "migrateToProfileIn sem nada para migrar não cria perfil" {
+test "migrateToProfileIn creates no profile when there is nothing to migrate" {
     const alloc = std.testing.allocator;
     var td = try TestDir.init(alloc);
     defer td.deinit(alloc);
@@ -982,7 +982,7 @@ test "migrateToProfileIn sem nada para migrar não cria perfil" {
     try std.testing.expect(!try td.exists(alloc, ".claude.work.json"));
 }
 
-test "pickerLinesIn sem email usa só o nome" {
+test "pickerLinesIn uses only the name when there is no email" {
     const alloc = std.testing.allocator;
     var td = try TestDir.init(alloc);
     defer td.deinit(alloc);
@@ -1017,7 +1017,7 @@ const FlowHome = struct {
     }
 };
 
-test "fluxo completo de comandos em HOME temporário (somente sem Desktop)" {
+test "full command flow in a temporary HOME (without Desktop only)" {
     if (platform.supports_desktop) return error.SkipZigTest;
     const alloc = std.testing.allocator;
     var td = try TestDir.init(alloc);
@@ -1088,7 +1088,7 @@ test "fluxo completo de comandos em HOME temporário (somente sem Desktop)" {
     try std.testing.expectEqual(@as(?[]const u8, null), try td.linkTarget(alloc, ".claude.json", &buf));
 }
 
-test "logout-all remove symlinks ativos (somente sem Desktop)" {
+test "logout-all removes active symlinks (without Desktop only)" {
     if (platform.supports_desktop) return error.SkipZigTest;
     const alloc = std.testing.allocator;
     var td = try TestDir.init(alloc);

@@ -1,4 +1,4 @@
-//! session.zig — extração e formatação de dados de sessão a partir de JSON
+//! session.zig — extraction and formatting of session data from JSON
 
 const std = @import("std");
 
@@ -19,7 +19,7 @@ fn objectString(obj: std.json.Value, key: []const u8) ?[]const u8 {
     return v.string;
 }
 
-/// Lê oauthAccount.{emailAddress,organizationName} de um ~/.claude.json. Caller chama deinit.
+/// Reads oauthAccount.{emailAddress,organizationName} from a ~/.claude.json. Caller calls deinit.
 pub fn parseAccount(gpa: std.mem.Allocator, content: []const u8) !Account {
     const none = Account{ .email = null, .organization = null };
     const parsed = std.json.parseFromSlice(std.json.Value, gpa, content, .{}) catch return none;
@@ -69,7 +69,7 @@ pub fn shortEmail(email: []const u8) []const u8 {
     return email[0..@min(email.len, 30)];
 }
 
-test "parseAccount lê email e organização" {
+test "parseAccount reads email and organization" {
     const alloc = std.testing.allocator;
     const account = try parseAccount(alloc, "{\"oauthAccount\":{\"emailAddress\":\"a@b.co\",\"organizationName\":\"Acme\"}}");
     defer account.deinit(alloc);
@@ -77,7 +77,7 @@ test "parseAccount lê email e organização" {
     try std.testing.expectEqualStrings("Acme", account.organization.?);
 }
 
-test "parseAccount retorna vazio para formatos inesperados" {
+test "parseAccount returns empty for unexpected formats" {
     const alloc = std.testing.allocator;
     const inputs = [_][]const u8{
         "not json",
@@ -94,7 +94,7 @@ test "parseAccount retorna vazio para formatos inesperados" {
     }
 }
 
-test "parseAccount aceita só organização" {
+test "parseAccount accepts organization only" {
     const alloc = std.testing.allocator;
     const account = try parseAccount(alloc, "{\"oauthAccount\":{\"organizationName\":\"Acme\"}}");
     defer account.deinit(alloc);
@@ -102,7 +102,7 @@ test "parseAccount aceita só organização" {
     try std.testing.expectEqualStrings("Acme", account.organization.?);
 }
 
-test "emailFromClaudeJson extrai só o email" {
+test "emailFromClaudeJson extracts only the email" {
     const alloc = std.testing.allocator;
     const email = try emailFromClaudeJson(alloc, "{\"oauthAccount\":{\"emailAddress\":\"me@work.com\",\"organizationName\":\"X\"}}");
     defer if (email) |e| alloc.free(e);
@@ -110,7 +110,7 @@ test "emailFromClaudeJson extrai só o email" {
     try std.testing.expectEqual(@as(?[]const u8, null), try emailFromClaudeJson(alloc, "{}"));
 }
 
-test "oauthFromCredentials e acessores" {
+test "oauthFromCredentials and accessors" {
     const alloc = std.testing.allocator;
     const parsed = try std.json.parseFromSlice(
         std.json.Value,
@@ -128,20 +128,20 @@ test "oauthFromCredentials e acessores" {
     try std.testing.expectEqual(@as(i64, 0), oauthInt(oauth, "missing"));
 }
 
-test "acessores tratam oauth ausente" {
+test "accessors handle missing oauth" {
     try std.testing.expectEqualStrings("?", oauthString(.null, "x"));
     try std.testing.expectEqual(@as(i64, 0), oauthInt(.null, "x"));
     try std.testing.expect(oauthFromCredentials(.null) == .null);
 }
 
-test "oauthFromCredentials sem claudeAiOauth" {
+test "oauthFromCredentials without claudeAiOauth" {
     const alloc = std.testing.allocator;
     const parsed = try std.json.parseFromSlice(std.json.Value, alloc, "{}", .{});
     defer parsed.deinit();
     try std.testing.expect(oauthFromCredentials(parsed.value) == .null);
 }
 
-test "accountLabel com e sem organização" {
+test "accountLabel with and without organization" {
     const alloc = std.testing.allocator;
     const plain = try accountLabel(alloc, "a@b.co", "");
     defer alloc.free(plain);
@@ -151,7 +151,7 @@ test "accountLabel com e sem organização" {
     try std.testing.expectEqualStrings("a@b.co (Acme)", with_org);
 }
 
-test "tokenPreview trunca em 15 caracteres" {
+test "tokenPreview truncates at 15 characters" {
     const alloc = std.testing.allocator;
     const long = try tokenPreview(alloc, "sk-ant-oat01-ABCDEFGHIJKLMNOPQRSTUVWXYZ");
     defer alloc.free(long);
@@ -161,7 +161,7 @@ test "tokenPreview trunca em 15 caracteres" {
     try std.testing.expectEqualStrings("short...", short);
 }
 
-test "shortEmail limita a 30 caracteres" {
+test "shortEmail caps at 30 characters" {
     try std.testing.expectEqualStrings("a@b.co", shortEmail("a@b.co"));
     try std.testing.expectEqual(@as(usize, 30), shortEmail("abcdefghijklmnopqrstuvwxyz0123456789@x.com").len);
 }

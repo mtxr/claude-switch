@@ -1,4 +1,4 @@
-//! platform.zig — capacidades por sistema operacional e seleção de assets de release
+//! platform.zig — per-OS capabilities and release asset selection
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -50,41 +50,41 @@ pub fn executablePath(buf: []u8) ?[]const u8 {
     }
 }
 
-test "releaseAssetFor mantém nomes macOS" {
+test "releaseAssetFor keeps macOS names" {
     var buf: [64]u8 = undefined;
     try std.testing.expectEqualStrings("csw-aarch64-apple-darwin", try releaseAssetFor(&buf, .aarch64, .macos));
     try std.testing.expectEqualStrings("csw-x86_64-apple-darwin", try releaseAssetFor(&buf, .x86_64, .macos));
 }
 
-test "releaseAssetFor seleciona assets Linux" {
+test "releaseAssetFor selects Linux assets" {
     var buf: [64]u8 = undefined;
     try std.testing.expectEqualStrings("csw-aarch64-unknown-linux-musl", try releaseAssetFor(&buf, .aarch64, .linux));
     try std.testing.expectEqualStrings("csw-x86_64-unknown-linux-musl", try releaseAssetFor(&buf, .x86_64, .linux));
 }
 
-test "releaseAssetFor rejeita plataformas desconhecidas" {
+test "releaseAssetFor rejects unknown platforms" {
     var buf: [64]u8 = undefined;
     try std.testing.expectError(error.UnsupportedPlatform, releaseAssetFor(&buf, .riscv64, .linux));
     try std.testing.expectError(error.UnsupportedPlatform, releaseAssetFor(&buf, .x86_64, .windows));
 }
 
-test "releaseAssetFor falha com buffer pequeno" {
+test "releaseAssetFor fails with a small buffer" {
     var buf: [4]u8 = undefined;
     try std.testing.expectError(error.NoSpaceLeft, releaseAssetFor(&buf, .x86_64, .linux));
 }
 
-test "releaseAsset corresponde ao host" {
+test "releaseAsset matches the host" {
     var buf: [64]u8 = undefined;
     const name = try releaseAsset(&buf);
     try std.testing.expect(std.mem.startsWith(u8, name, "csw-"));
 }
 
-test "executablePath resolve o binário de teste" {
+test "executablePath resolves the test binary" {
     var buf: [std.fs.max_path_bytes]u8 = undefined;
     const path = executablePath(&buf) orelse return error.SkipZigTest;
     try std.testing.expect(std.fs.path.isAbsolute(path));
 }
 
-test "picker_install_hint não vazio" {
+test "picker_install_hint is not empty" {
     try std.testing.expect(picker_install_hint.len > 0);
 }

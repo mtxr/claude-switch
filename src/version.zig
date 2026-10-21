@@ -1,4 +1,4 @@
-//! version.zig — comparação de versões e cache de update check
+//! version.zig — version comparison and update check cache
 
 const std = @import("std");
 
@@ -50,8 +50,8 @@ pub fn formatUpdateCache(gpa: std.mem.Allocator, checked: i64, latest: []const u
     return std.fmt.allocPrint(gpa, "{{\"checked\":{d},\"latest\":\"{s}\"}}\n", .{ checked, latest });
 }
 
-/// Extrai a versão (sem prefixo "v") de uma resposta de release do GitHub.
-/// Retorna error.ParseError se o corpo não for JSON e null se não houver tag_name textual.
+/// Extracts the version (without the "v" prefix) from a GitHub release response.
+/// Returns error.ParseError if the body is not JSON and null if there is no textual tag_name.
 pub fn latestFromRelease(gpa: std.mem.Allocator, body: []const u8) !?[]const u8 {
     const parsed = std.json.parseFromSlice(std.json.Value, gpa, body, .{}) catch return error.ParseError;
     defer parsed.deinit();
@@ -61,18 +61,18 @@ pub fn latestFromRelease(gpa: std.mem.Allocator, body: []const u8) !?[]const u8 
     return @as(?[]const u8, try gpa.dupe(u8, trimTag(tag.string)));
 }
 
-test "parseSemver lê três componentes" {
+test "parseSemver reads three components" {
     try std.testing.expectEqual([3]u32{ 1, 2, 3 }, parseSemver("1.2.3"));
 }
 
-test "parseSemver tolera entradas incompletas e inválidas" {
+test "parseSemver tolerates incomplete and invalid input" {
     try std.testing.expectEqual([3]u32{ 1, 0, 0 }, parseSemver("1"));
     try std.testing.expectEqual([3]u32{ 0, 0, 0 }, parseSemver(""));
     try std.testing.expectEqual([3]u32{ 1, 0, 3 }, parseSemver("1.x.3"));
     try std.testing.expectEqual([3]u32{ 1, 2, 3 }, parseSemver("1.2.3.4"));
 }
 
-test "isNewerVersion compara major, minor e patch" {
+test "isNewerVersion compares major, minor and patch" {
     try std.testing.expect(isNewerVersion("2.0.0", "1.9.9"));
     try std.testing.expect(!isNewerVersion("1.9.9", "2.0.0"));
     try std.testing.expect(isNewerVersion("1.3.0", "1.2.9"));
@@ -82,12 +82,12 @@ test "isNewerVersion compara major, minor e patch" {
     try std.testing.expect(!isNewerVersion("1.2.3", "1.2.3"));
 }
 
-test "trimTag remove prefixo v" {
+test "trimTag removes the v prefix" {
     try std.testing.expectEqualStrings("0.2.6", trimTag("v0.2.6"));
     try std.testing.expectEqualStrings("0.2.6", trimTag("0.2.6"));
 }
 
-test "parseUpdateCache lê versão e timestamp" {
+test "parseUpdateCache reads version and timestamp" {
     const alloc = std.testing.allocator;
     const cache = parseUpdateCache(alloc, "{\"checked\":100,\"latest\":\"0.3.0\"}");
     defer if (cache.version) |v| alloc.free(v);
@@ -95,20 +95,20 @@ test "parseUpdateCache lê versão e timestamp" {
     try std.testing.expectEqualStrings("0.3.0", cache.version.?);
 }
 
-test "parseUpdateCache ignora tipos errados" {
+test "parseUpdateCache ignores wrong types" {
     const alloc = std.testing.allocator;
     const cache = parseUpdateCache(alloc, "{\"checked\":\"x\",\"latest\":5}");
     try std.testing.expectEqual(@as(i64, 0), cache.checked);
     try std.testing.expectEqual(@as(?[]const u8, null), cache.version);
 }
 
-test "parseUpdateCache trata JSON inválido e não-objeto" {
+test "parseUpdateCache handles invalid and non-object JSON" {
     const alloc = std.testing.allocator;
     try std.testing.expectEqual(@as(?[]const u8, null), parseUpdateCache(alloc, "nope").version);
     try std.testing.expectEqual(@as(?[]const u8, null), parseUpdateCache(alloc, "[1]").version);
 }
 
-test "formatUpdateCache faz round-trip com parseUpdateCache" {
+test "formatUpdateCache round-trips with parseUpdateCache" {
     const alloc = std.testing.allocator;
     const text = try formatUpdateCache(alloc, 42, "1.0.0");
     defer alloc.free(text);
@@ -118,20 +118,20 @@ test "formatUpdateCache faz round-trip com parseUpdateCache" {
     try std.testing.expectEqualStrings("1.0.0", cache.version.?);
 }
 
-test "latestFromRelease extrai tag sem prefixo" {
+test "latestFromRelease extracts the tag without prefix" {
     const alloc = std.testing.allocator;
     const latest = try latestFromRelease(alloc, "{\"tag_name\":\"v1.2.3\"}");
     defer if (latest) |l| alloc.free(l);
     try std.testing.expectEqualStrings("1.2.3", latest.?);
 }
 
-test "latestFromRelease retorna null sem tag válida" {
+test "latestFromRelease returns null without a valid tag" {
     const alloc = std.testing.allocator;
     try std.testing.expectEqual(@as(?[]const u8, null), try latestFromRelease(alloc, "{}"));
     try std.testing.expectEqual(@as(?[]const u8, null), try latestFromRelease(alloc, "{\"tag_name\":1}"));
     try std.testing.expectEqual(@as(?[]const u8, null), try latestFromRelease(alloc, "[]"));
 }
 
-test "latestFromRelease falha em JSON inválido" {
+test "latestFromRelease fails on invalid JSON" {
     try std.testing.expectError(error.ParseError, latestFromRelease(std.testing.allocator, "garbage"));
 }

@@ -389,7 +389,7 @@ test "getSessionKey fails when DB does not exist" {
     try std.testing.expectError(error.CookiesDbNotFound, getSessionKeyWithKeyIn(alloc, base, "key"));
 }
 
-test "operações de Desktop são inertes sem suporte" {
+test "Desktop operations are inert without support" {
     if (platform.supports_desktop) return error.SkipZigTest;
     const alloc = std.testing.allocator;
     var tio = std.Io.Threaded.init(std.heap.page_allocator, .{});
