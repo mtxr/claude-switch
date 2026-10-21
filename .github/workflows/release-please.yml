@@ -30,9 +30,15 @@ jobs:
       matrix:
         include:
           - runner: macos-latest
-            arch: aarch64
-          - runner: macos-13
-            arch: x86_64
+            asset: csw-aarch64-apple-darwin
+          - runner: macos-15-intel
+            asset: csw-x86_64-apple-darwin
+          - runner: ubuntu-latest
+            asset: csw-x86_64-unknown-linux-musl
+            target: x86_64-linux-musl
+          - runner: ubuntu-latest
+            asset: csw-aarch64-unknown-linux-musl
+            target: aarch64-linux-musl
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -43,15 +49,20 @@ jobs:
           version: "0.16.0"
 
       - name: Build
+        shell: bash
         run: |
-          zig build -Doptimize=ReleaseSmall
-          strip zig-out/bin/csw
+          if [ -n "${{ matrix.target }}" ]; then
+            zig build -Doptimize=ReleaseSmall -Dtarget=${{ matrix.target }}
+          else
+            zig build -Doptimize=ReleaseSmall
+            strip zig-out/bin/csw
+          fi
 
       - name: Upload binary to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          cp zig-out/bin/csw "zig-out/bin/csw-${{ matrix.arch }}-apple-darwin"
+          cp zig-out/bin/csw "zig-out/bin/${{ matrix.asset }}"
           gh release upload ${{ needs.release-please.outputs.tag_name }} \
-            "zig-out/bin/csw-${{ matrix.arch }}-apple-darwin" \
+            "zig-out/bin/${{ matrix.asset }}" \
             --repo ${{ github.repository }}

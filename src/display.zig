@@ -1,12 +1,14 @@
 //! display.zig — formatted terminal output
 
 const std = @import("std");
+const builtin = @import("builtin");
 const c = @cImport({
     @cInclude("time.h");
 });
 
 fn writeStdout(bytes: []const u8) void {
-    _ = std.c.write(std.posix.STDOUT_FILENO, bytes.ptr, bytes.len);
+    const fd = if (builtin.is_test) std.posix.STDERR_FILENO else std.posix.STDOUT_FILENO;
+    _ = std.c.write(fd, bytes.ptr, bytes.len);
 }
 
 fn writeStderr(bytes: []const u8) void {
@@ -62,9 +64,9 @@ pub fn print(comptime fmt: []const u8, args: anytype) void {
 pub fn fmtExpiry(allocator: std.mem.Allocator, expires_ms: i64) ![]const u8 {
     if (expires_ms == 0) return allocator.dupe(u8, "?");
 
-    var ts: c.struct_timespec = undefined;
-    _ = c.clock_gettime(0, &ts);
-    const now_ms = @as(i64, ts.tv_sec) * 1000 + @divTrunc(@as(i64, ts.tv_nsec), 1_000_000);
+    var ts: std.c.timespec = undefined;
+    _ = std.c.clock_gettime(.REALTIME, &ts);
+    const now_ms = @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
     const remaining_hours = @divTrunc(expires_ms - now_ms, 1000 * 3600);
     const expires_sec: c.time_t = @intCast(@divTrunc(expires_ms, 1000));
     var tm: c.struct_tm = undefined;

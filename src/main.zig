@@ -5,7 +5,10 @@ const display = @import("display.zig");
 const keychain = @import("keychain.zig");
 const desktop = @import("desktop.zig");
 const paths = @import("paths.zig");
+const platform = @import("platform.zig");
 const profile = @import("profile.zig");
+const session = @import("session.zig");
+const version = @import("version.zig");
 
 comptime {
     _ = @import("crypto.zig");
@@ -13,7 +16,10 @@ comptime {
     _ = @import("keychain.zig");
     _ = @import("desktop.zig");
     _ = @import("paths.zig");
+    _ = @import("platform.zig");
     _ = @import("profile.zig");
+    _ = @import("session.zig");
+    _ = @import("version.zig");
 }
 
 const KEYCHAIN_CODE = "Claude Code-credentials";
@@ -41,45 +47,14 @@ pub fn main(init: std.process.Init) !void {
     };
 }
 
-fn parseSemver(v: []const u8) [3]u32 {
-    var parts = std.mem.splitScalar(u8, v, '.');
-    var result = [3]u32{ 0, 0, 0 };
-    var i: usize = 0;
-    while (parts.next()) |part| : (i += 1) {
-        if (i >= 3) break;
-        result[i] = std.fmt.parseInt(u32, part, 10) catch 0;
-    }
-    return result;
-}
-
-fn isNewerVersion(candidate: []const u8, current: []const u8) bool {
-    const c = parseSemver(candidate);
-    const cur = parseSemver(current);
-    if (c[0] != cur[0]) return c[0] > cur[0];
-    if (c[1] != cur[1]) return c[1] > cur[1];
-    return c[2] > cur[2];
-}
-
-fn readUpdateCache(gpa: std.mem.Allocator, cache_path_z: [*:0]const u8) struct { version: ?[]const u8, checked: i64 } {
+fn readUpdateCache(gpa: std.mem.Allocator, cache_path_z: [*:0]const u8) version.UpdateCache {
     const fd = std.c.open(cache_path_z, .{}, @as(std.c.mode_t, 0));
     if (fd < 0) return .{ .version = null, .checked = 0 };
     defer _ = std.c.close(fd);
     var buf: [256]u8 = undefined;
     const n = std.c.read(fd, &buf, buf.len);
     if (n <= 0) return .{ .version = null, .checked = 0 };
-    const parsed = std.json.parseFromSlice(std.json.Value, gpa, buf[0..@intCast(n)], .{}) catch
-        return .{ .version = null, .checked = 0 };
-    defer parsed.deinit();
-    if (parsed.value != .object) return .{ .version = null, .checked = 0 };
-    var checked: i64 = 0;
-    var version: ?[]const u8 = null;
-    if (parsed.value.object.get("checked")) |v| {
-        if (v == .integer) checked = v.integer;
-    }
-    if (parsed.value.object.get("latest")) |v| {
-        if (v == .string) version = gpa.dupe(u8, v.string) catch null;
-    }
-    return .{ .version = version, .checked = checked };
+    return version.parseUpdateCache(gpa, buf[0..@intCast(n)]);
 }
 
 fn checkUpdateSilent(gpa: std.mem.Allocator, io: std.Io) void {
@@ -93,7 +68,7 @@ fn checkUpdateSilent(gpa: std.mem.Allocator, io: std.Io) void {
     defer if (cache.version) |v| gpa.free(v);
 
     if (cache.version) |latest| {
-        if (isNewerVersion(latest, VERSION)) {
+        if (version.isNewerVersion(latest, VERSION)) {
             const msg = std.fmt.allocPrint(gpa, "Update available: v{s} → v{s}  (run: csw update)", .{ VERSION, latest }) catch return;
             defer gpa.free(msg);
             display.info(msg);
@@ -103,9 +78,7 @@ fn checkUpdateSilent(gpa: std.mem.Allocator, io: std.Io) void {
     if (now - cache.checked < UPDATE_CHECK_INTERVAL_S) return;
 
     var exe_buf: [std.fs.max_path_bytes]u8 = undefined;
-    var size: u32 = @intCast(exe_buf.len);
-    if (std.c._NSGetExecutablePath(&exe_buf, &size) != 0) return;
-    const exe_path = std.mem.sliceTo(&exe_buf, 0);
+    const exe_path = platform.executablePath(&exe_buf) orelse return;
 
     _ = std.process.spawn(io, .{
         .argv = &.{ exe_path, "--check-update-bg" },
@@ -139,16 +112,11 @@ fn cmdCheckUpdateBg(gpa: std.mem.Allocator, io: std.Io) void {
     };
     if (!success) return;
 
-    var latest: []const u8 = VERSION;
-    const parsed = std.json.parseFromSlice(std.json.Value, gpa, result.stdout, .{}) catch return;
-    defer parsed.deinit();
-    if (parsed.value == .object) {
-        if (parsed.value.object.get("tag_name")) |v| {
-            if (v == .string) latest = std.mem.trimStart(u8, v.string, "v");
-        }
-    }
+    const latest_owned = version.latestFromRelease(gpa, result.stdout) catch return;
+    defer if (latest_owned) |l| gpa.free(l);
+    const latest = latest_owned orelse VERSION;
 
-    const json = std.fmt.allocPrint(gpa, "{{\"checked\":{d},\"latest\":\"{s}\"}}\n", .{ now, latest }) catch return;
+    const json = version.formatUpdateCache(gpa, now, latest) catch return;
     defer gpa.free(json);
     const fd = std.c.open(cache_path_z, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, @as(std.c.mode_t, 0o600));
     if (fd < 0) return;
@@ -248,10 +216,7 @@ fn doctorFail(label: []const u8, detail: []const u8) void {
     display.print("\x1b[31m  [fail]\x1b[0m {s:<32} {s}\n", .{ label, detail });
 }
 
-fn cmdDoctor(gpa: std.mem.Allocator, io: std.Io) !void {
-    display.print("\ncsw doctor\n\n", .{});
-    var issues: usize = 0;
-
+fn doctorMacos(gpa: std.mem.Allocator, io: std.Io, h: []const u8, issues: *usize) !void {
     display.print("  Claude Desktop\n  ──────────────────────────────────\n", .{});
 
     const app_exists = desktop.pathExists(gpa, "/Applications/Claude.app");
@@ -259,7 +224,7 @@ fn cmdDoctor(gpa: std.mem.Allocator, io: std.Io) !void {
         doctorOk("Claude.app", "/Applications/Claude.app");
     } else {
         doctorFail("Claude.app", "not found — install from https://claude.ai/download");
-        issues += 1;
+        issues.* += 1;
     }
 
     const running = desktop.isRunning(gpa, io);
@@ -276,7 +241,7 @@ fn cmdDoctor(gpa: std.mem.Allocator, io: std.Io) !void {
         doctorOk("Claude Safe Storage", "found");
     } else |_| {
         doctorFail("Claude Safe Storage", "missing — open Claude Desktop to create it");
-        issues += 1;
+        issues.* += 1;
     }
 
     if (keychain.get(gpa, io, KEYCHAIN_CODE)) |v| {
@@ -288,16 +253,13 @@ fn cmdDoctor(gpa: std.mem.Allocator, io: std.Io) !void {
 
     display.print("\n  Data\n  ──────────────────────────────────\n", .{});
 
-    const h = try paths.home(gpa);
-    defer gpa.free(h);
-
     const desktop_dir = try paths.desktopDirIn(gpa, h);
     defer gpa.free(desktop_dir);
     if (desktop.pathExists(gpa, desktop_dir)) {
         doctorOk("Desktop data dir", "~/Library/Application Support/Claude/");
     } else {
         doctorFail("Desktop data dir", "missing — Claude Desktop has never run?");
-        issues += 1;
+        issues.* += 1;
     }
 
     const cookies_path = try std.fs.path.join(gpa, &.{ desktop_dir, "Cookies" });
@@ -306,13 +268,38 @@ fn cmdDoctor(gpa: std.mem.Allocator, io: std.Io) !void {
         doctorOk("Cookies DB", "found");
     } else {
         doctorFail("Cookies DB", "missing");
-        issues += 1;
+        issues.* += 1;
     }
 
     if (desktop.hasSessionKeyCookie(gpa, h)) {
         doctorOk("sessionKey cookie", "found (legacy token auth)");
     } else {
         doctorWarn("sessionKey cookie", "absent — Desktop likely uses OAuth now (save/use still work)");
+    }
+}
+
+fn doctorLinux(gpa: std.mem.Allocator, io: std.Io) void {
+    display.print("  Claude Code\n  ──────────────────────────────────\n", .{});
+    if (keychain.get(gpa, io, KEYCHAIN_CODE)) |v| {
+        gpa.free(v);
+        doctorOk("Claude Code credentials", "found (~/.claude/.credentials.json)");
+    } else |_| {
+        doctorWarn("Claude Code credentials", "missing — run: claude auth login");
+    }
+    doctorWarn("Claude Desktop", "not supported on this OS");
+}
+
+fn cmdDoctor(gpa: std.mem.Allocator, io: std.Io) !void {
+    display.print("\ncsw doctor\n\n", .{});
+    var issues: usize = 0;
+
+    const h = try paths.home(gpa);
+    defer gpa.free(h);
+
+    if (comptime platform.supports_desktop) {
+        try doctorMacos(gpa, io, h, &issues);
+    } else {
+        doctorLinux(gpa, io);
     }
 
     display.print("\n  Profiles\n  ──────────────────────────────────\n", .{});
@@ -356,7 +343,9 @@ fn cmdDoctor(gpa: std.mem.Allocator, io: std.Io) !void {
         }
     }
     if (!found_picker) {
-        doctorWarn("Fuzzy picker", "sk/fzf not found — install: brew install sk");
+        var hint_buf: [128]u8 = undefined;
+        const hint = std.fmt.bufPrint(&hint_buf, "sk/fzf not found — install: {s}", .{platform.picker_install_hint}) catch "sk/fzf not found";
+        doctorWarn("Fuzzy picker", hint);
     }
 
     display.print("\n", .{});
@@ -375,11 +364,7 @@ fn cmdWhoami(gpa: std.mem.Allocator, io: std.Io) !void {
         defer gpa.free(token);
         if (std.json.parseFromSlice(std.json.Value, gpa, token, .{})) |parsed| {
             defer parsed.deinit();
-            const oauth = if (parsed.value == .object)
-                parsed.value.object.get("claudeAiOauth") orelse .null
-            else
-                std.json.Value.null;
-            try printCodeSession(gpa, oauth);
+            try printCodeSession(gpa, session.oauthFromCredentials(parsed.value));
         } else |_| {
             display.section("Claude Code");
             display.row("Error", "failed to parse token");
@@ -389,7 +374,10 @@ fn cmdWhoami(gpa: std.mem.Allocator, io: std.Io) !void {
         display.row("Status", "no active session");
     }
 
-    if (desktop.getSessionKey(gpa, io)) |token| {
+    if (comptime !platform.supports_desktop) {
+        display.section("Claude Desktop");
+        display.row("Status", "not supported on this OS");
+    } else if (desktop.getSessionKey(gpa, io)) |token| {
         defer gpa.free(token);
         display.section("Claude Desktop");
         display.row("Token type", "sessionKey (sk-ant-sid)");
@@ -423,35 +411,17 @@ fn cmdWhoami(gpa: std.mem.Allocator, io: std.Io) !void {
                 defer gpa.free(token);
                 if (std.json.parseFromSlice(std.json.Value, gpa, token, .{})) |parsed| {
                     defer parsed.deinit();
-                    const oauth = if (parsed.value == .object)
-                        parsed.value.object.get("claudeAiOauth") orelse std.json.Value.null
-                    else
-                        std.json.Value.null;
+                    const oauth = session.oauthFromCredentials(parsed.value);
 
                     const email_raw = try profile.profileJsonEmail(gpa, p);
                     defer if (email_raw) |e| gpa.free(e);
                     const email = email_raw orelse "?";
 
-                    const sub = if (oauth == .object)
-                        if (oauth.object.get("subscriptionType")) |v|
-                            if (v == .string) v.string else "?"
-                        else
-                            "?"
-                    else
-                        "?";
-
-                    const exp_ms: i64 = if (oauth == .object)
-                        if (oauth.object.get("expiresAt")) |v|
-                            if (v == .integer) v.integer else @as(i64, 0)
-                        else
-                            @as(i64, 0)
-                    else
-                        @as(i64, 0);
-
-                    const exp_str = try display.fmtExpiry(gpa, exp_ms);
+                    const sub = session.oauthString(oauth, "subscriptionType");
+                    const exp_str = try display.fmtExpiry(gpa, session.oauthInt(oauth, "expiresAt"));
                     defer gpa.free(exp_str);
 
-                    const email_short = email[0..@min(email.len, 30)];
+                    const email_short = session.shortEmail(email);
                     display.print(
                         "  • {s:<12} {s:<30} {s:<10} {s}{s}\n",
                         .{ p, email_short, sub, exp_str, marker },
@@ -475,12 +445,8 @@ fn printCodeSession(gpa: std.mem.Allocator, oauth: std.json.Value) !void {
     const cj = try paths.claudeJsonIn(gpa, h);
     defer gpa.free(cj);
 
-    var email: []const u8 = "?";
-    var org: []const u8 = "";
-    var email_owned: ?[]const u8 = null;
-    var org_owned: ?[]const u8 = null;
-    defer if (email_owned) |e| gpa.free(e);
-    defer if (org_owned) |o| gpa.free(o);
+    var account = session.Account{ .email = null, .organization = null };
+    defer account.deinit(gpa);
 
     readProfileJson: {
         const cj_z = gpa.dupeZ(u8, cj) catch break :readProfileJson;
@@ -491,56 +457,22 @@ fn printCodeSession(gpa: std.mem.Allocator, oauth: std.json.Value) !void {
         var raw_buf: [1024 * 1024]u8 = undefined;
         const n = std.c.read(fd, &raw_buf, raw_buf.len);
         if (n <= 0) break :readProfileJson;
-        const content = raw_buf[0..@intCast(n)];
-        const parsed = std.json.parseFromSlice(std.json.Value, gpa, content, .{}) catch break :readProfileJson;
-        defer parsed.deinit();
-        if (parsed.value == .object) {
-            if (parsed.value.object.get("oauthAccount")) |acct| {
-                if (acct == .object) {
-                    if (acct.object.get("emailAddress")) |v| {
-                        if (v == .string) {
-                            email_owned = gpa.dupe(u8, v.string) catch break :readProfileJson;
-                            email = email_owned.?;
-                        }
-                    }
-                    if (acct.object.get("organizationName")) |v| {
-                        if (v == .string) {
-                            org_owned = gpa.dupe(u8, v.string) catch break :readProfileJson;
-                            org = org_owned.?;
-                        }
-                    }
-                }
-            }
-        }
+        account = session.parseAccount(gpa, raw_buf[0..@intCast(n)]) catch break :readProfileJson;
     }
+
+    const email = account.email orelse "?";
+    const org = account.organization orelse "";
 
     display.section("Claude Code");
 
-    if (org.len == 0) {
-        display.row("Account", email);
-    } else {
-        const acct_str = try std.fmt.allocPrint(gpa, "{s} ({s})", .{ email, org });
-        defer gpa.free(acct_str);
-        display.row("Account", acct_str);
-    }
+    const acct_str = try session.accountLabel(gpa, email, org);
+    defer gpa.free(acct_str);
+    display.row("Account", acct_str);
 
-    const sub = if (oauth == .object)
-        if (oauth.object.get("subscriptionType")) |v| if (v == .string) v.string else "?" else "?"
-    else
-        "?";
-    display.row("Plan", sub);
+    display.row("Plan", session.oauthString(oauth, "subscriptionType"));
+    display.row("Rate limit", session.oauthString(oauth, "rateLimitTier"));
 
-    const rate = if (oauth == .object)
-        if (oauth.object.get("rateLimitTier")) |v| if (v == .string) v.string else "?" else "?"
-    else
-        "?";
-    display.row("Rate limit", rate);
-
-    const exp_ms: i64 = if (oauth == .object)
-        if (oauth.object.get("expiresAt")) |v| if (v == .integer) v.integer else 0 else 0
-    else
-        0;
-    const exp_str = try display.fmtExpiry(gpa, exp_ms);
+    const exp_str = try display.fmtExpiry(gpa, session.oauthInt(oauth, "expiresAt"));
     defer gpa.free(exp_str);
     display.row("Expires", exp_str);
 
@@ -554,12 +486,7 @@ fn printCodeSession(gpa: std.mem.Allocator, oauth: std.json.Value) !void {
         }
     }
 
-    const token_str = if (oauth == .object)
-        if (oauth.object.get("accessToken")) |v| if (v == .string) v.string else "?" else "?"
-    else
-        "?";
-    const preview_len = @min(token_str.len, 15);
-    const token_preview = try std.fmt.allocPrint(gpa, "{s}...", .{token_str[0..preview_len]});
+    const token_preview = try session.tokenPreview(gpa, session.oauthString(oauth, "accessToken"));
     defer gpa.free(token_preview);
     display.row("Token", token_preview);
 }
@@ -602,7 +529,7 @@ fn cmdUpdate(gpa: std.mem.Allocator, io: std.Io, verbose: bool) !void {
     else
         "";
 
-    const latest = std.mem.trimStart(u8, tag, "v");
+    const latest = version.trimTag(tag);
     if (latest.len == 0) {
         display.print(
             "❌  could not determine latest version — check https://github.com/{s}/releases\n",
@@ -622,20 +549,20 @@ fn cmdUpdate(gpa: std.mem.Allocator, io: std.Io, verbose: bool) !void {
     defer gpa.free(update_msg);
     display.info(update_msg);
 
-    const arch = comptime if (@import("builtin").cpu.arch == .aarch64) "aarch64" else "x86_64";
+    var asset_buf: [64]u8 = undefined;
+    const asset = platform.releaseAsset(&asset_buf) catch {
+        platform.notSupported("csw update");
+        return error.UnsupportedPlatform;
+    };
     const dl_url = try std.fmt.allocPrint(
         gpa,
-        "https://github.com/{s}/releases/download/v{s}/csw-{s}-apple-darwin",
-        .{ GITHUB_REPO, latest, arch },
+        "https://github.com/{s}/releases/download/v{s}/{s}",
+        .{ GITHUB_REPO, latest, asset },
     );
     defer gpa.free(dl_url);
 
     var exe_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const exe_path = blk: {
-        var size: u32 = @intCast(exe_buf.len);
-        if (std.c._NSGetExecutablePath(&exe_buf, &size) == 0) {
-            break :blk std.mem.sliceTo(&exe_buf, 0);
-        }
+    const exe_path = platform.executablePath(&exe_buf) orelse {
         display.err("could not determine executable path");
         return error.ExePathFailed;
     };
@@ -683,21 +610,4 @@ fn cmdUpdate(gpa: std.mem.Allocator, io: std.Io, verbose: bool) !void {
     const done_msg = try std.fmt.allocPrint(gpa, "Updated to v{s}", .{latest});
     defer gpa.free(done_msg);
     display.ok(done_msg);
-}
-
-test "token preview truncated to 15 chars" {
-    const token = "sk-ant-oat01-ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-    const preview_len = @min(token.len, 15);
-    const preview = try std.fmt.allocPrint(std.testing.allocator, "{s}...", .{token[0..preview_len]});
-    defer std.testing.allocator.free(preview);
-    try std.testing.expectEqualStrings("sk-ant-oat01-AB...", preview);
-    try std.testing.expectEqual(@as(usize, 18), preview.len);
-}
-
-test "token shorter than 15 does not panic" {
-    const token = "short";
-    const preview_len = @min(token.len, 15);
-    const preview = try std.fmt.allocPrint(std.testing.allocator, "{s}...", .{token[0..preview_len]});
-    defer std.testing.allocator.free(preview);
-    try std.testing.expectEqualStrings("short...", preview);
 }

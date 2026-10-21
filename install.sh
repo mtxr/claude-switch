@@ -7,6 +7,16 @@ BIN_DIR="$HOME/.local/bin"
 BINARY="csw"
 ALIAS="claude-switch"
 
+# Detect OS
+case "$(uname -s)" in
+  Darwin) TARGET_SUFFIX="apple-darwin" ;;
+  Linux) TARGET_SUFFIX="unknown-linux-musl" ;;
+  *)
+    echo "❌  Unsupported OS: $(uname -s)"
+    exit 1
+    ;;
+esac
+
 # Detect architecture
 ARCH=$(uname -m)
 case "$ARCH" in
@@ -30,7 +40,7 @@ if [ -z "$LATEST" ]; then
   exit 1
 fi
 
-URL="https://github.com/${REPO}/releases/download/v${LATEST}/${BINARY}-${ARCH}-apple-darwin"
+URL="https://github.com/${REPO}/releases/download/v${LATEST}/${BINARY}-${ARCH}-${TARGET_SUFFIX}"
 
 mkdir -p "$BIN_DIR"
 

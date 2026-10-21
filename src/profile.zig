@@ -5,6 +5,8 @@ const desktop = @import("desktop.zig");
 const display = @import("display.zig");
 const keychain = @import("keychain.zig");
 const paths = @import("paths.zig");
+const platform = @import("platform.zig");
+const session = @import("session.zig");
 
 const c = @cImport({
     @cInclude("dirent.h");
@@ -39,12 +41,14 @@ pub fn cmdSave(gpa: std.mem.Allocator, io: std.Io, name: []const u8) !void {
 
     var c_token: ?[]const u8 = null;
     var c_acct: []const u8 = "";
-    if (keychain.get(gpa, io, KEYCHAIN_CODE)) |token| {
-        display.info("Reading Claude Code session...");
-        c_token = token;
-        c_acct = keychain.getAccount(gpa, io, KEYCHAIN_CODE);
-    } else |_| {
-        display.info("Claude Code not available — skipping.");
+    if (comptime platform.supports_keychain) {
+        if (keychain.get(gpa, io, KEYCHAIN_CODE)) |token| {
+            display.info("Reading Claude Code session...");
+            c_token = token;
+            c_acct = keychain.getAccount(gpa, io, KEYCHAIN_CODE);
+        } else |_| {
+            display.info("Claude Code not available — skipping.");
+        }
     }
     defer if (c_token) |t| gpa.free(t);
     defer if (c_acct.len > 0) gpa.free(c_acct);
@@ -88,7 +92,7 @@ pub fn cmdUse(gpa: std.mem.Allocator, io: std.Io, name: []const u8) !void {
     const svc = try std.fmt.allocPrint(gpa, "{s}{s}", .{ KC_PROFILE_CODE, name });
     defer gpa.free(svc);
 
-    const c_token = keychain.get(gpa, io, svc) catch null;
+    const c_token: ?[]const u8 = if (comptime platform.supports_keychain) keychain.get(gpa, io, svc) catch null else null;
     defer if (c_token) |t| gpa.free(t);
     const c_acct = keychain.getAccount(gpa, io, svc);
     defer gpa.free(c_acct);
@@ -279,7 +283,7 @@ pub fn cmdLogoutAll(gpa: std.mem.Allocator, io: std.Io) !void {
     const h = try paths.home(gpa);
     defer gpa.free(h);
 
-    display.info("Removing Claude Code keychain entry...");
+    if (comptime platform.supports_keychain) display.info("Removing Claude Code keychain entry...");
     keychain.delete(gpa, io, KEYCHAIN_CODE) catch {};
     desktop.quit(gpa, io);
 
@@ -368,15 +372,7 @@ pub fn profileJsonEmailIn(gpa: std.mem.Allocator, base: []const u8, name: []cons
     if (n <= 0) return null;
     const content = buf[0..@intCast(n)];
 
-    const parsed = std.json.parseFromSlice(std.json.Value, gpa, content, .{}) catch return null;
-    defer parsed.deinit();
-
-    if (parsed.value != .object) return null;
-    const oauth = parsed.value.object.get("oauthAccount") orelse return null;
-    if (oauth != .object) return null;
-    const email = oauth.object.get("emailAddress") orelse return null;
-    if (email != .string) return null;
-    return @as(?[]const u8, try gpa.dupe(u8, email.string));
+    return session.emailFromClaudeJson(gpa, content);
 }
 
 pub fn switchLinkIn(gpa: std.mem.Allocator, link: []const u8, target: []const u8, ensure_dir: bool) !void {
@@ -571,7 +567,9 @@ fn fuzzyCmd(gpa: std.mem.Allocator, io: std.Io) ![]const u8 {
         defer gpa.free(result.stderr);
         if (result.term == .exited and result.term.exited == 0) return gpa.dupe(u8, cmd);
     }
-    display.err("sk or fzf not found. Install with: brew install sk");
+    var hint_buf: [128]u8 = undefined;
+    const hint = std.fmt.bufPrint(&hint_buf, "sk or fzf not found. Install with: {s}", .{platform.picker_install_hint}) catch "sk or fzf not found.";
+    display.err(hint);
     return error.FuzzyNotFound;
 }
 
@@ -722,4 +720,392 @@ test "pickerName extracts name from line" {
     try std.testing.expectEqualStrings("work", pickerName("work    \tme@work.com\n"));
     try std.testing.expectEqualStrings("personal", pickerName("personal\n"));
     try std.testing.expectEqualStrings("", pickerName("\n"));
+}
+
+const TestDir = struct {
+    tmp: std.testing.TmpDir,
+    base: []const u8,
+
+    fn init(alloc: std.mem.Allocator) !TestDir {
+        var tmp = std.testing.tmpDir(.{});
+        errdefer tmp.cleanup();
+        var base_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+        const base_len = try tmp.dir.realPath(std.Options.debug_io, &base_buf);
+        return .{ .tmp = tmp, .base = try alloc.dupe(u8, base_buf[0..base_len]) };
+    }
+
+    fn deinit(self: *TestDir, alloc: std.mem.Allocator) void {
+        alloc.free(self.base);
+        self.tmp.cleanup();
+    }
+
+    fn join(self: TestDir, alloc: std.mem.Allocator, name: []const u8) ![]const u8 {
+        return std.fs.path.join(alloc, &.{ self.base, name });
+    }
+
+    fn write(self: TestDir, alloc: std.mem.Allocator, name: []const u8, content: []const u8) !void {
+        const path = try self.join(alloc, name);
+        defer alloc.free(path);
+        const path_z = try alloc.dupeZ(u8, path);
+        defer alloc.free(path_z);
+        const fd = std.c.open(path_z, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, @as(std.c.mode_t, 0o600));
+        try std.testing.expect(fd >= 0);
+        _ = std.c.write(fd, content.ptr, content.len);
+        _ = std.c.close(fd);
+    }
+
+    fn mkdir(self: TestDir, alloc: std.mem.Allocator, name: []const u8) !void {
+        const path = try self.join(alloc, name);
+        defer alloc.free(path);
+        try desktop.mkdirAllC(alloc, path);
+    }
+
+    fn exists(self: TestDir, alloc: std.mem.Allocator, name: []const u8) !bool {
+        const path = try self.join(alloc, name);
+        defer alloc.free(path);
+        return desktop.pathExists(alloc, path);
+    }
+
+    fn linkTarget(self: TestDir, alloc: std.mem.Allocator, name: []const u8, buf: []u8) !?[]const u8 {
+        const path = try self.join(alloc, name);
+        defer alloc.free(path);
+        const n = desktop.readLinkC(alloc, path, buf) catch return null;
+        return buf[0..n];
+    }
+};
+
+fn testIo() std.Io.Threaded {
+    return std.Io.Threaded.init(std.heap.page_allocator, .{});
+}
+
+fn linkAndCurrent(alloc: std.mem.Allocator, td: TestDir, target: []const u8) !?[]const u8 {
+    const link = try paths.claudeJsonIn(alloc, td.base);
+    defer alloc.free(link);
+    const link_z = try alloc.dupeZ(u8, link);
+    defer alloc.free(link_z);
+    const target_z = try alloc.dupeZ(u8, target);
+    defer alloc.free(target_z);
+    try std.testing.expectEqual(@as(c_int, 0), std.c.symlink(target_z, link_z));
+    return currentIn(alloc, td.base);
+}
+
+test "listIn ignores files that are not profiles" {
+    const alloc = std.testing.allocator;
+    var td = try TestDir.init(alloc);
+    defer td.deinit(alloc);
+    const noise = [_][]const u8{ ".claude.json", ".claude..json", "other.json", ".claude.work", ".claude.x.txt" };
+    for (noise) |n| try td.write(alloc, n, "{}");
+    try td.write(alloc, ".claude.ok.json", "{}");
+
+    const result = try listIn(alloc, td.base);
+    defer {
+        for (result) |p| alloc.free(p);
+        alloc.free(result);
+    }
+    try std.testing.expectEqual(@as(usize, 1), result.len);
+    try std.testing.expectEqualStrings("ok", result[0]);
+}
+
+test "listIn returns empty for a missing base" {
+    const alloc = std.testing.allocator;
+    const result = try listIn(alloc, "/nonexistent/csw-test-base");
+    defer alloc.free(result);
+    try std.testing.expectEqual(@as(usize, 0), result.len);
+}
+
+test "currentIn ignores a symlink that does not point to a profile" {
+    const alloc = std.testing.allocator;
+    var td = try TestDir.init(alloc);
+    defer td.deinit(alloc);
+    try td.write(alloc, "random.txt", "x");
+    const target = try td.join(alloc, "random.txt");
+    defer alloc.free(target);
+    try std.testing.expectEqual(@as(?[]const u8, null), try linkAndCurrent(alloc, td, target));
+}
+
+test "currentIn ignores a symlink with an empty profile name" {
+    const alloc = std.testing.allocator;
+    var td = try TestDir.init(alloc);
+    defer td.deinit(alloc);
+    try td.write(alloc, ".claude..json", "x");
+    const target = try td.join(alloc, ".claude..json");
+    defer alloc.free(target);
+    try std.testing.expectEqual(@as(?[]const u8, null), try linkAndCurrent(alloc, td, target));
+}
+
+test "currentIn ignores a symlink with the right prefix and wrong suffix" {
+    const alloc = std.testing.allocator;
+    var td = try TestDir.init(alloc);
+    defer td.deinit(alloc);
+    try td.write(alloc, ".claude.work.txt", "x");
+    const target = try td.join(alloc, ".claude.work.txt");
+    defer alloc.free(target);
+    try std.testing.expectEqual(@as(?[]const u8, null), try linkAndCurrent(alloc, td, target));
+}
+
+test "profileJsonEmailIn returns null for a missing, empty or invalid file" {
+    const alloc = std.testing.allocator;
+    var td = try TestDir.init(alloc);
+    defer td.deinit(alloc);
+
+    try std.testing.expectEqual(@as(?[]const u8, null), try profileJsonEmailIn(alloc, td.base, "none"));
+
+    try td.write(alloc, ".claude.empty.json", "");
+    try std.testing.expectEqual(@as(?[]const u8, null), try profileJsonEmailIn(alloc, td.base, "empty"));
+
+    try td.write(alloc, ".claude.bad.json", "not json");
+    try std.testing.expectEqual(@as(?[]const u8, null), try profileJsonEmailIn(alloc, td.base, "bad"));
+
+    try td.write(alloc, ".claude.noemail.json", "{\"oauthAccount\":{}}");
+    try std.testing.expectEqual(@as(?[]const u8, null), try profileJsonEmailIn(alloc, td.base, "noemail"));
+}
+
+test "switchLinkIn refuses to replace a real file" {
+    const alloc = std.testing.allocator;
+    var td = try TestDir.init(alloc);
+    defer td.deinit(alloc);
+    try td.write(alloc, "real", "x");
+    try td.write(alloc, "target", "y");
+    const link = try td.join(alloc, "real");
+    defer alloc.free(link);
+    const target = try td.join(alloc, "target");
+    defer alloc.free(target);
+    try std.testing.expectError(error.NotASymlink, switchLinkIn(alloc, link, target, false));
+}
+
+test "switchLinkIn skips a missing target without ensure_dir" {
+    const alloc = std.testing.allocator;
+    var td = try TestDir.init(alloc);
+    defer td.deinit(alloc);
+    const link = try td.join(alloc, "link");
+    defer alloc.free(link);
+    const target = try td.join(alloc, "missing");
+    defer alloc.free(target);
+    try switchLinkIn(alloc, link, target, false);
+    try std.testing.expect(!try td.exists(alloc, "link"));
+}
+
+test "switchLinkIn creates the target with ensure_dir and swaps an existing symlink" {
+    const alloc = std.testing.allocator;
+    var td = try TestDir.init(alloc);
+    defer td.deinit(alloc);
+    const link = try td.join(alloc, "link");
+    defer alloc.free(link);
+    const first = try td.join(alloc, "first");
+    defer alloc.free(first);
+    const second = try td.join(alloc, "second");
+    defer alloc.free(second);
+
+    try switchLinkIn(alloc, link, first, true);
+    try std.testing.expect(try td.exists(alloc, "first"));
+    try switchLinkIn(alloc, link, second, true);
+
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    try std.testing.expectEqualStrings(second, (try td.linkTarget(alloc, "link", &buf)).?);
+}
+
+test "switchLinksIn fails without the profile json or dir" {
+    const alloc = std.testing.allocator;
+    var td = try TestDir.init(alloc);
+    defer td.deinit(alloc);
+    try std.testing.expectError(error.ProfileNotFound, switchLinksIn(alloc, td.base, "work"));
+    try td.write(alloc, ".claude.work.json", "{}");
+    try std.testing.expectError(error.ProfileNotFound, switchLinksIn(alloc, td.base, "work"));
+}
+
+test "switchLinksIn points json and dir at the profile" {
+    const alloc = std.testing.allocator;
+    var td = try TestDir.init(alloc);
+    defer td.deinit(alloc);
+    try td.write(alloc, ".claude.work.json", "{}");
+    try td.mkdir(alloc, ".claude.work");
+    try switchLinksIn(alloc, td.base, "work");
+
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const json_target = (try td.linkTarget(alloc, ".claude.json", &buf)).?;
+    try std.testing.expect(std.mem.endsWith(u8, json_target, ".claude.work.json"));
+    const dir_target = (try td.linkTarget(alloc, ".claude", &buf)).?;
+    try std.testing.expect(std.mem.endsWith(u8, dir_target, ".claude.work"));
+}
+
+test "migrateToProfileIn moves real files and leaves symlinks" {
+    const alloc = std.testing.allocator;
+    var td = try TestDir.init(alloc);
+    defer td.deinit(alloc);
+    var tio = testIo();
+    defer tio.deinit();
+
+    try td.write(alloc, ".claude.json", "{\"oauthAccount\":{\"emailAddress\":\"me@work.com\"}}");
+    try td.mkdir(alloc, ".claude");
+    try td.write(alloc, ".claude/.credentials.json", "{\"claudeAiOauth\":{}}");
+
+    try migrateToProfileIn(alloc, tio.io(), td.base, "work");
+
+    try std.testing.expect(try td.exists(alloc, ".claude.work.json"));
+    try std.testing.expect(try td.exists(alloc, ".claude.work/.credentials.json"));
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    try std.testing.expect((try td.linkTarget(alloc, ".claude.json", &buf)) != null);
+    try std.testing.expect((try td.linkTarget(alloc, ".claude", &buf)) != null);
+
+    const email = try profileJsonEmailIn(alloc, td.base, "work");
+    defer if (email) |e| alloc.free(e);
+    try std.testing.expectEqualStrings("me@work.com", email.?);
+}
+
+test "migrateToProfileIn is idempotent when symlinks already exist" {
+    const alloc = std.testing.allocator;
+    var td = try TestDir.init(alloc);
+    defer td.deinit(alloc);
+    var tio = testIo();
+    defer tio.deinit();
+
+    try td.write(alloc, ".claude.json", "{}");
+    try td.mkdir(alloc, ".claude");
+    try migrateToProfileIn(alloc, tio.io(), td.base, "work");
+    try migrateToProfileIn(alloc, tio.io(), td.base, "work");
+
+    const result = try listIn(alloc, td.base);
+    defer {
+        for (result) |p| alloc.free(p);
+        alloc.free(result);
+    }
+    try std.testing.expectEqual(@as(usize, 1), result.len);
+}
+
+test "migrateToProfileIn creates no profile when there is nothing to migrate" {
+    const alloc = std.testing.allocator;
+    var td = try TestDir.init(alloc);
+    defer td.deinit(alloc);
+    var tio = testIo();
+    defer tio.deinit();
+    try migrateToProfileIn(alloc, tio.io(), td.base, "work");
+    try std.testing.expect(!try td.exists(alloc, ".claude.work.json"));
+}
+
+test "pickerLinesIn uses only the name when there is no email" {
+    const alloc = std.testing.allocator;
+    var td = try TestDir.init(alloc);
+    defer td.deinit(alloc);
+    const lines = try pickerLinesIn(alloc, td.base, &.{"solo"});
+    defer {
+        for (lines) |l| alloc.free(l);
+        alloc.free(lines);
+    }
+    try std.testing.expectEqualStrings("solo", lines[0]);
+}
+
+extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
+
+const FlowHome = struct {
+    previous: ?[]const u8,
+
+    fn enter(alloc: std.mem.Allocator, base: []const u8) !FlowHome {
+        const previous = if (std.c.getenv("HOME")) |v| try alloc.dupe(u8, std.mem.sliceTo(v, 0)) else null;
+        const base_z = try alloc.dupeZ(u8, base);
+        defer alloc.free(base_z);
+        try std.testing.expectEqual(@as(c_int, 0), setenv("HOME", base_z, 1));
+        return .{ .previous = previous };
+    }
+
+    fn leave(self: FlowHome, alloc: std.mem.Allocator) void {
+        if (self.previous) |p| {
+            const p_z = alloc.dupeZ(u8, p) catch return;
+            defer alloc.free(p_z);
+            _ = setenv("HOME", p_z, 1);
+            alloc.free(p);
+        }
+    }
+};
+
+test "full command flow in a temporary HOME (without Desktop only)" {
+    if (platform.supports_desktop) return error.SkipZigTest;
+    const alloc = std.testing.allocator;
+    var td = try TestDir.init(alloc);
+    defer td.deinit(alloc);
+    var tio = testIo();
+    defer tio.deinit();
+    const io = tio.io();
+
+    const home_guard = try FlowHome.enter(alloc, td.base);
+    defer home_guard.leave(alloc);
+
+    try std.testing.expectError(error.NoProfiles, cmdPick(alloc, io));
+    try std.testing.expectError(error.NoProfiles, cmdDelete(alloc, io, null));
+    try cmdList(alloc, io);
+
+    try td.write(alloc, ".claude.json", "{\"oauthAccount\":{\"emailAddress\":\"me@work.com\"}}");
+    try td.mkdir(alloc, ".claude");
+    try td.write(alloc, ".claude/.credentials.json", "{\"claudeAiOauth\":{\"subscriptionType\":\"max\"}}");
+
+    try cmdSave(alloc, io, "work");
+    {
+        const active = try current(alloc);
+        defer if (active) |a| alloc.free(a);
+        try std.testing.expectEqualStrings("work", active.?);
+    }
+
+    try std.testing.expectError(error.ProfileAlreadyExists, cmdNew(alloc, io, "work"));
+    try cmdNew(alloc, io, "personal");
+    {
+        const active = try current(alloc);
+        defer if (active) |a| alloc.free(a);
+        try std.testing.expectEqualStrings("personal", active.?);
+    }
+    try std.testing.expectError(error.KeychainNotFound, keychain.get(alloc, io, KEYCHAIN_CODE));
+
+    try cmdUse(alloc, io, "work");
+    {
+        const active = try current(alloc);
+        defer if (active) |a| alloc.free(a);
+        try std.testing.expectEqualStrings("work", active.?);
+    }
+    const credentials = try keychain.get(alloc, io, KEYCHAIN_CODE);
+    defer alloc.free(credentials);
+    try std.testing.expect(std.mem.indexOf(u8, credentials, "max") != null);
+
+    try std.testing.expectError(error.ProfileNotFound, cmdUse(alloc, io, "ghost"));
+    try std.testing.expectError(error.ProfileNotFound, cmdDelete(alloc, io, "ghost"));
+
+    const names = try list(alloc);
+    defer {
+        for (names) |p| alloc.free(p);
+        alloc.free(names);
+    }
+    try std.testing.expectEqual(@as(usize, 2), names.len);
+    const email = try profileJsonEmail(alloc, "work");
+    defer if (email) |e| alloc.free(e);
+    try std.testing.expectEqualStrings("me@work.com", email.?);
+
+    try cmdList(alloc, io);
+
+    try cmdDelete(alloc, io, "personal");
+    try std.testing.expect(!try td.exists(alloc, ".claude.personal.json"));
+    try std.testing.expect(!try td.exists(alloc, ".claude.personal"));
+
+    try cmdDelete(alloc, io, "work");
+    try std.testing.expect(!try td.exists(alloc, ".claude.work.json"));
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    try std.testing.expectEqual(@as(?[]const u8, null), try td.linkTarget(alloc, ".claude.json", &buf));
+}
+
+test "logout-all removes active symlinks (without Desktop only)" {
+    if (platform.supports_desktop) return error.SkipZigTest;
+    const alloc = std.testing.allocator;
+    var td = try TestDir.init(alloc);
+    defer td.deinit(alloc);
+    var tio = testIo();
+    defer tio.deinit();
+    const io = tio.io();
+
+    const home_guard = try FlowHome.enter(alloc, td.base);
+    defer home_guard.leave(alloc);
+
+    try td.write(alloc, ".claude.json", "{}");
+    try td.mkdir(alloc, ".claude");
+    try cmdSave(alloc, io, "work");
+    try cmdLogoutAll(alloc, io);
+
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    try std.testing.expectEqual(@as(?[]const u8, null), try td.linkTarget(alloc, ".claude.json", &buf));
+    try std.testing.expect(try td.exists(alloc, ".claude.work.json"));
 }

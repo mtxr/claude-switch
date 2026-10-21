@@ -9,7 +9,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    root_mod.linkSystemLibrary("sqlite3", .{});
+    if (target.result.os.tag == .macos) root_mod.linkSystemLibrary("sqlite3", .{});
     root_mod.link_libc = true;
 
     const exe = b.addExecutable(.{
@@ -29,7 +29,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    test_mod.linkSystemLibrary("sqlite3", .{});
+    if (target.result.os.tag == .macos) test_mod.linkSystemLibrary("sqlite3", .{});
     test_mod.link_libc = true;
 
     const unit_tests = b.addTest(.{
