@@ -46,7 +46,7 @@ brew install sk
 
 ## Migrating from the Python version
 
-If you were using the previous Python-based `csw`, your profiles and keychain entries are **fully compatible** — no data migration needed. The Rust binary reads the exact same Keychain entries and file paths.
+If you were using the previous Python-based `csw`, your profiles and keychain entries are **fully compatible** — no data migration needed. The Zig binary reads the exact same Keychain entries and file paths.
 
 The only thing that changes is how `csw` is installed:
 
