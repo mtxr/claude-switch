@@ -12,6 +12,7 @@ const c = if (platform.supports_desktop) @cImport({
 }) else struct {};
 
 const KEYCHAIN_DESKTOP = "Claude Safe Storage";
+const OWNER_FILE = ".csw-profile";
 
 pub fn isRunning(gpa: std.mem.Allocator, io: std.Io) bool {
     if (comptime !platform.supports_desktop) return false;
@@ -52,6 +53,61 @@ pub fn launch(gpa: std.mem.Allocator, io: std.Io) void {
     }) catch return;
     gpa.free(result.stdout);
     gpa.free(result.stderr);
+}
+
+/// Profile that owns the main Desktop data dir. The marker lives inside the
+/// dir, so it travels with it when the dir is renamed. Caller frees.
+pub fn ownerIn(gpa: std.mem.Allocator, base: []const u8) !?[]const u8 {
+    const marker = try ownerFileIn(gpa, base);
+    defer gpa.free(marker);
+    const marker_z = try gpa.dupeZ(u8, marker);
+    defer gpa.free(marker_z);
+
+    const fd = std.c.open(marker_z, .{ .ACCMODE = .RDONLY });
+    if (fd < 0) return null;
+    defer _ = std.c.close(fd);
+    var buf: [256]u8 = undefined;
+    const n = std.c.read(fd, &buf, buf.len);
+    if (n <= 0) return null;
+    const name = std.mem.trim(u8, buf[0..@intCast(n)], " \t\r\n");
+    if (name.len == 0) return null;
+    return @as(?[]const u8, try gpa.dupe(u8, name));
+}
+
+pub fn writeOwnerIn(gpa: std.mem.Allocator, base: []const u8, name: []const u8) void {
+    const marker = ownerFileIn(gpa, base) catch return;
+    defer gpa.free(marker);
+    const marker_z = gpa.dupeZ(u8, marker) catch return;
+    defer gpa.free(marker_z);
+    const fd = std.c.open(marker_z, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, @as(std.c.mode_t, 0o644));
+    if (fd < 0) return;
+    defer _ = std.c.close(fd);
+    _ = std.c.write(fd, name.ptr, name.len);
+}
+
+pub fn clearOwnerIn(gpa: std.mem.Allocator, base: []const u8) void {
+    const marker = ownerFileIn(gpa, base) catch return;
+    defer gpa.free(marker);
+    deletePathC(gpa, marker);
+}
+
+/// Records `name` as owner of an existing, unclaimed Desktop data dir. Returns
+/// true when the marker was written. Never quits or moves anything.
+pub fn adoptOwnerIn(gpa: std.mem.Allocator, base: []const u8, name: []const u8) !bool {
+    const dd = try paths.desktopDirIn(gpa, base);
+    defer gpa.free(dd);
+    if (isSymlink(gpa, dd) or !pathExists(gpa, dd)) return false;
+    const owner = try ownerIn(gpa, base);
+    defer if (owner) |o| gpa.free(o);
+    if (owner != null) return false;
+    writeOwnerIn(gpa, base, name);
+    return true;
+}
+
+fn ownerFileIn(gpa: std.mem.Allocator, base: []const u8) ![]const u8 {
+    const dd = try paths.desktopDirIn(gpa, base);
+    defer gpa.free(dd);
+    return std.fs.path.join(gpa, &.{ dd, OWNER_FILE });
 }
 
 pub fn hasData(gpa: std.mem.Allocator, name: []const u8) bool {
@@ -95,7 +151,8 @@ pub fn hasDataIn(gpa: std.mem.Allocator, base: []const u8, name: []const u8) boo
         const full = entry.*.name;
         const end = std.mem.indexOfScalar(u8, &full, 0) orelse full.len;
         const n = full[0..end];
-        if (!std.mem.eql(u8, n, ".") and !std.mem.eql(u8, n, "..")) {
+        const ignored = std.mem.eql(u8, n, ".") or std.mem.eql(u8, n, "..") or std.mem.eql(u8, n, OWNER_FILE);
+        if (!ignored) {
             found = true;
             break;
         }
@@ -120,6 +177,13 @@ pub fn migrateIn(gpa: std.mem.Allocator, base: []const u8) !void {
 }
 
 pub fn swapIn(gpa: std.mem.Allocator, base: []const u8, current_name: ?[]const u8, to_name: []const u8) !void {
+    const owner = try ownerIn(gpa, base);
+    defer if (owner) |o| gpa.free(o);
+    if (owner) |o| {
+        if (std.mem.eql(u8, o, to_name)) return;
+    }
+    const from_name = owner orelse current_name;
+
     const dd = try paths.desktopDirIn(gpa, base);
     defer gpa.free(dd);
     const d_to = try paths.desktopProfileDirIn(gpa, base, to_name);
@@ -128,7 +192,7 @@ pub fn swapIn(gpa: std.mem.Allocator, base: []const u8, current_name: ?[]const u
     if (isSymlink(gpa, dd)) {
         deletePathC(gpa, dd);
     } else if (pathExists(gpa, dd)) {
-        if (current_name) |cur| {
+        if (from_name) |cur| {
             const d_from = try paths.desktopProfileDirIn(gpa, base, cur);
             defer gpa.free(d_from);
             if (pathExists(gpa, d_from)) deleteDirC(gpa, d_from);
@@ -141,6 +205,7 @@ pub fn swapIn(gpa: std.mem.Allocator, base: []const u8, current_name: ?[]const u
     } else {
         try mkdirAllC(gpa, dd);
     }
+    writeOwnerIn(gpa, base, to_name);
 }
 
 pub fn getSessionKeyWithKeyIn(gpa: std.mem.Allocator, base: []const u8, raw_key: []const u8) ![]const u8 {
@@ -340,6 +405,67 @@ test "swap moves dirs correctly" {
     const work_marker = try std.fs.path.join(alloc, &.{ d_work, "marker" });
     defer alloc.free(work_marker);
     try std.testing.expect(pathExists(alloc, work_marker));
+}
+
+fn tmpBase(alloc: std.mem.Allocator, tmp: *std.testing.TmpDir) ![]const u8 {
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const len = try tmp.dir.realPath(std.Options.debug_io, &buf);
+    return alloc.dupe(u8, buf[0..len]);
+}
+
+test "swap records the owner and moves the right dir back" {
+    const alloc = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const base = try tmpBase(alloc, &tmp);
+    defer alloc.free(base);
+
+    try std.testing.expect((try ownerIn(alloc, base)) == null);
+
+    try swapIn(alloc, base, null, "personal");
+    const first = (try ownerIn(alloc, base)).?;
+    defer alloc.free(first);
+    try std.testing.expectEqualStrings("personal", first);
+
+    try swapIn(alloc, base, "ignored", "work");
+    const second = (try ownerIn(alloc, base)).?;
+    defer alloc.free(second);
+    try std.testing.expectEqualStrings("work", second);
+
+    try std.testing.expect(!hasDataIn(alloc, base, "personal"));
+    const d_personal = try paths.desktopProfileDirIn(alloc, base, "personal");
+    defer alloc.free(d_personal);
+    const stored_marker = try std.fs.path.join(alloc, &.{ d_personal, OWNER_FILE });
+    defer alloc.free(stored_marker);
+    try std.testing.expect(pathExists(alloc, stored_marker));
+
+    try swapIn(alloc, base, "work", "work");
+    const unchanged = (try ownerIn(alloc, base)).?;
+    defer alloc.free(unchanged);
+    try std.testing.expectEqualStrings("work", unchanged);
+}
+
+test "adoptOwnerIn claims only an existing unclaimed dir" {
+    const alloc = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const base = try tmpBase(alloc, &tmp);
+    defer alloc.free(base);
+
+    try std.testing.expect(!try adoptOwnerIn(alloc, base, "work"));
+
+    const dd = try paths.desktopDirIn(alloc, base);
+    defer alloc.free(dd);
+    try mkdirAllC(alloc, dd);
+    try std.testing.expect(try adoptOwnerIn(alloc, base, "work"));
+    try std.testing.expect(!try adoptOwnerIn(alloc, base, "other"));
+
+    const owner = (try ownerIn(alloc, base)).?;
+    defer alloc.free(owner);
+    try std.testing.expectEqualStrings("work", owner);
+
+    clearOwnerIn(alloc, base);
+    try std.testing.expect((try ownerIn(alloc, base)) == null);
 }
 
 test "getSessionKey decrypts cookie" {
