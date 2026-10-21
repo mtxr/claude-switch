@@ -7,8 +7,12 @@ on:
 
 jobs:
   test:
-    name: Build & Test
-    runs-on: macos-latest
+    name: Build & Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
     steps:
       - uses: actions/checkout@v4
 
@@ -25,3 +29,7 @@ jobs:
 
       - name: Test
         run: zig build test
+
+      - name: Cross-compile Linux aarch64
+        if: runner.os == 'Linux'
+        run: zig build -Dtarget=aarch64-linux-musl -Doptimize=ReleaseSmall
