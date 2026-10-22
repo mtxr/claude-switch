@@ -30,6 +30,16 @@ pub fn expiresAtMs(gpa: std.mem.Allocator, blob: []const u8) ?i64 {
     return if (expires == .integer) expires.integer else null;
 }
 
+pub const Status = enum { ready, migratable, needs_login };
+
+pub fn decide(has_dir_entry: bool, live_expires_ms: ?i64, now_ms: i64) Status {
+    if (has_dir_entry) return .ready;
+    if (live_expires_ms) |expires| {
+        if (expires > now_ms) return .migratable;
+    }
+    return .needs_login;
+}
+
 /// Index of the blob whose OAuth token expires last; absent blobs are skipped
 /// and a blob without a readable expiry ranks lowest.
 pub fn freshest(gpa: std.mem.Allocator, blobs: []const ?[]const u8) ?usize {
@@ -44,6 +54,16 @@ pub fn freshest(gpa: std.mem.Allocator, blobs: []const ?[]const u8) ?usize {
         }
     }
     return best;
+}
+
+pub const Pick = struct { status: Status, index: ?usize };
+
+/// Decides what to do for a config dir given the stored copies of its login.
+pub fn choose(gpa: std.mem.Allocator, has_dir_entry: bool, blobs: []const ?[]const u8, now_ms: i64) Pick {
+    if (has_dir_entry) return .{ .status = .ready, .index = null };
+    const index = freshest(gpa, blobs) orelse return .{ .status = .needs_login, .index = null };
+    const status = decide(false, expiresAtMs(gpa, blobs[index].?), now_ms);
+    return .{ .status = status, .index = if (status == .migratable) index else null };
 }
 
 /// Keychain service Claude Code uses for the config dir of a profile.
@@ -122,11 +142,17 @@ pub fn activate(gpa: std.mem.Allocator, io: std.Io, base: []const u8, name: []co
 
 /// Stored login blob of a profile, or null. Caller frees.
 pub fn readProfile(gpa: std.mem.Allocator, io: std.Io, base: []const u8, name: []const u8) !?[]const u8 {
-    if (comptime !platform.supports_keychain) return null;
+    if (comptime !platform.supports_keychain) return readProfileFile(gpa, base, name);
     try migrateLegacy(gpa, io, base, name);
     const dir_service = try profileService(gpa, base, name);
     defer gpa.free(dir_service);
     return read(gpa, io, dir_service);
+}
+
+fn readProfileFile(gpa: std.mem.Allocator, base: []const u8, name: []const u8) ?[]const u8 {
+    const service = legacyService(gpa, name) catch return null;
+    defer gpa.free(service);
+    return keychain.fileGetIn(gpa, base, service) catch null;
 }
 
 pub fn forget(gpa: std.mem.Allocator, io: std.Io, base: []const u8, name: []const u8) !void {
@@ -137,6 +163,31 @@ pub fn forget(gpa: std.mem.Allocator, io: std.Io, base: []const u8, name: []cons
     defer gpa.free(legacy_service);
     keychain.delete(gpa, io, dir_service) catch {};
     keychain.delete(gpa, io, legacy_service) catch {};
+}
+
+/// Makes sure the config dir has credentials: converts a legacy entry, then
+/// seeds the per-dir entry from the `live` entry when `adopt_live` is set and
+/// that token has not expired; otherwise reports that a login is needed.
+pub fn ensure(gpa: std.mem.Allocator, io: std.Io, dir: []const u8, name: []const u8, live: []const u8, adopt_live: bool) !Status {
+    if (comptime !platform.supports_keychain) return .ready;
+    if (std.fs.path.dirname(dir)) |base| try migrateLegacy(gpa, io, base, name);
+
+    const service = try serviceForDir(gpa, dir);
+    defer gpa.free(service);
+    if (keychain.exists(gpa, io, service)) return .ready;
+
+    var blobs: [1]?[]const u8 = .{if (adopt_live) read(gpa, io, live) else null};
+    defer if (blobs[0]) |blob| gpa.free(blob);
+
+    const pick = choose(gpa, false, &blobs, nowMs());
+    if (pick.index != null) try copyEntry(gpa, io, live, service, blobs[0].?);
+    return pick.status;
+}
+
+fn nowMs() i64 {
+    var ts: std.c.timespec = undefined;
+    _ = std.c.clock_gettime(.REALTIME, &ts);
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
 }
 
 test "serviceForDir matches the hash Claude Code uses" {
@@ -180,6 +231,35 @@ test "freshest picks the latest expiry and skips absent blobs" {
     try std.testing.expectEqual(@as(?usize, 0), freshest(alloc, &.{ "garbage", "junk" }));
     try std.testing.expectEqual(@as(?usize, null), freshest(alloc, &.{ null, null }));
     try std.testing.expectEqual(@as(?usize, null), freshest(alloc, &.{}));
+}
+
+test "decide prefers an existing entry, then a live token, then login" {
+    try std.testing.expectEqual(Status.ready, decide(true, null, 100));
+    try std.testing.expectEqual(Status.migratable, decide(false, 200, 100));
+    try std.testing.expectEqual(Status.needs_login, decide(false, 100, 100));
+    try std.testing.expectEqual(Status.needs_login, decide(false, 50, 100));
+    try std.testing.expectEqual(Status.needs_login, decide(false, null, 100));
+}
+
+test "choose migrates the freshest live token and otherwise asks for a login" {
+    const alloc = std.testing.allocator;
+    const live = "{\"claudeAiOauth\":{\"expiresAt\":300}}";
+    const stale = "{\"claudeAiOauth\":{\"expiresAt\":50}}";
+
+    const ready = choose(alloc, true, &.{live}, 100);
+    try std.testing.expectEqual(Status.ready, ready.status);
+    try std.testing.expectEqual(@as(?usize, null), ready.index);
+
+    const migrate = choose(alloc, false, &.{ stale, live }, 100);
+    try std.testing.expectEqual(Status.migratable, migrate.status);
+    try std.testing.expectEqual(@as(?usize, 1), migrate.index);
+
+    const expired = choose(alloc, false, &.{ stale, null }, 100);
+    try std.testing.expectEqual(Status.needs_login, expired.status);
+    try std.testing.expectEqual(@as(?usize, null), expired.index);
+
+    const none = choose(alloc, false, &.{ null, null }, 100);
+    try std.testing.expectEqual(Status.needs_login, none.status);
 }
 
 test "profileService hashes the profile config dir" {
@@ -241,7 +321,7 @@ fn sandboxIo() std.Io.Threaded {
 }
 
 test "migrateLegacy keeps the fresher legacy token and removes the legacy entry" {
-    if (comptime !platform.supports_keychain) return error.SkipZigTest;
+    if (!keychain.realKeychainEnabled()) return error.SkipZigTest;
     const alloc = std.testing.allocator;
     var tio = sandboxIo();
     defer tio.deinit();
@@ -257,7 +337,7 @@ test "migrateLegacy keeps the fresher legacy token and removes the legacy entry"
 }
 
 test "migrateLegacy keeps a fresher per-dir token and still removes the legacy entry" {
-    if (comptime !platform.supports_keychain) return error.SkipZigTest;
+    if (!keychain.realKeychainEnabled()) return error.SkipZigTest;
     const alloc = std.testing.allocator;
     var tio = sandboxIo();
     defer tio.deinit();
@@ -273,7 +353,7 @@ test "migrateLegacy keeps a fresher per-dir token and still removes the legacy e
 }
 
 test "migrateLegacy does nothing without a legacy entry" {
-    if (comptime !platform.supports_keychain) return error.SkipZigTest;
+    if (!keychain.realKeychainEnabled()) return error.SkipZigTest;
     const alloc = std.testing.allocator;
     var tio = sandboxIo();
     defer tio.deinit();
@@ -286,7 +366,7 @@ test "migrateLegacy does nothing without a legacy entry" {
 }
 
 test "capture stores the live login only when it is allowed and fresher" {
-    if (comptime !platform.supports_keychain) return error.SkipZigTest;
+    if (!keychain.realKeychainEnabled()) return error.SkipZigTest;
     const alloc = std.testing.allocator;
     var tio = sandboxIo();
     defer tio.deinit();
@@ -309,7 +389,7 @@ test "capture stores the live login only when it is allowed and fresher" {
 }
 
 test "activate copies the profile login to the live entry" {
-    if (comptime !platform.supports_keychain) return error.SkipZigTest;
+    if (!keychain.realKeychainEnabled()) return error.SkipZigTest;
     const alloc = std.testing.allocator;
     var tio = sandboxIo();
     defer tio.deinit();
@@ -325,7 +405,7 @@ test "activate copies the profile login to the live entry" {
 }
 
 test "readProfile returns the stored login or null" {
-    if (comptime !platform.supports_keychain) return error.SkipZigTest;
+    if (!keychain.realKeychainEnabled()) return error.SkipZigTest;
     const alloc = std.testing.allocator;
     var tio = sandboxIo();
     defer tio.deinit();
@@ -340,8 +420,25 @@ test "readProfile returns the stored login or null" {
     try std.testing.expectEqualStrings(fixture_old, blob);
 }
 
+test "readProfileFile reads the credentials file of the profile dir" {
+    const alloc = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const len = try tmp.dir.realPath(std.Options.debug_io, &buf);
+    const base = buf[0..len];
+
+    try std.testing.expectEqual(@as(?[]const u8, null), readProfileFile(alloc, base, "p"));
+
+    try tmp.dir.createDir(std.Options.debug_io, ".claude.p", .default_dir);
+    try tmp.dir.writeFile(std.Options.debug_io, .{ .sub_path = ".claude.p/.credentials.json", .data = fixture_old });
+    const blob = readProfileFile(alloc, base, "p").?;
+    defer alloc.free(blob);
+    try std.testing.expectEqualStrings(fixture_old, blob);
+}
+
 test "forget removes the per-dir and legacy entries" {
-    if (comptime !platform.supports_keychain) return error.SkipZigTest;
+    if (!keychain.realKeychainEnabled()) return error.SkipZigTest;
     const alloc = std.testing.allocator;
     var tio = sandboxIo();
     defer tio.deinit();
@@ -353,6 +450,44 @@ test "forget removes the per-dir and legacy entries" {
     try put(alloc, io, sb.legacy_service, fixture_old);
     try forget(alloc, io, sb.base, "p");
     try expectEntry(alloc, io, sb.dir_service, null);
+    try expectEntry(alloc, io, sb.legacy_service, null);
+}
+
+test "ensure reuses a live token, keeps an existing entry and otherwise needs a login" {
+    if (!keychain.realKeychainEnabled()) return error.SkipZigTest;
+    const alloc = std.testing.allocator;
+    var tio = sandboxIo();
+    defer tio.deinit();
+    const io = tio.io();
+    const sb = try Sandbox.init(alloc, io, "ens");
+    defer sb.deinit(alloc, io);
+    const dir = try paths.profileDirIn(alloc, sb.base, "p");
+    defer alloc.free(dir);
+
+    try std.testing.expectEqual(Status.needs_login, try ensure(alloc, io, dir, "p", sb.live, true));
+
+    const far_future = "{\"claudeAiOauth\":{\"expiresAt\":99999999999999}}";
+    try put(alloc, io, sb.live, far_future);
+    try std.testing.expectEqual(Status.needs_login, try ensure(alloc, io, dir, "p", sb.live, false));
+    try std.testing.expectEqual(Status.migratable, try ensure(alloc, io, dir, "p", sb.live, true));
+    try expectEntry(alloc, io, sb.dir_service, far_future);
+    try std.testing.expectEqual(Status.ready, try ensure(alloc, io, dir, "p", sb.live, true));
+}
+
+test "ensure converts a legacy entry before looking at the per-dir entry" {
+    if (!keychain.realKeychainEnabled()) return error.SkipZigTest;
+    const alloc = std.testing.allocator;
+    var tio = sandboxIo();
+    defer tio.deinit();
+    const io = tio.io();
+    const sb = try Sandbox.init(alloc, io, "ens-leg");
+    defer sb.deinit(alloc, io);
+    const dir = try paths.profileDirIn(alloc, sb.base, "p");
+    defer alloc.free(dir);
+
+    try put(alloc, io, sb.legacy_service, fixture_new);
+    try std.testing.expectEqual(Status.ready, try ensure(alloc, io, dir, "p", sb.live, false));
+    try expectEntry(alloc, io, sb.dir_service, fixture_new);
     try expectEntry(alloc, io, sb.legacy_service, null);
 }
 
@@ -368,4 +503,5 @@ test "keychain operations are no-ops without Keychain support" {
     try std.testing.expect(!try activate(alloc, io, "/nowhere", "p", DEFAULT_SERVICE));
     try std.testing.expectEqual(@as(?[]const u8, null), try readProfile(alloc, io, "/nowhere", "p"));
     try forget(alloc, io, "/nowhere", "p");
+    try std.testing.expectEqual(Status.ready, try ensure(alloc, io, "/nowhere/.claude.p", "p", DEFAULT_SERVICE, true));
 }

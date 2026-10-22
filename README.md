@@ -119,7 +119,24 @@ csw whoami         Show active session info (Code + Desktop + saved profiles)
 csw pick           Interactive fuzzy picker (sk / fzf)
 csw update         Update csw to the latest release
 csw logout-all     Log out of all accounts and remove active symlinks
+csw run <name> [-- <claude args>]  Run claude with a profile in this terminal only
+csw login <name>   Start claude for a profile and log in once
+csw env <name>     Print `export CLAUDE_CONFIG_DIR=...` (use with eval)
 ```
+
+### Concurrent profiles (Claude Code only)
+
+Claude Code keeps its Keychain login per `CLAUDE_CONFIG_DIR` (service `Claude Code-credentials-<first 8 hex of sha256(dir)>`). csw points each profile at its own directory, so two terminals can use two profiles at once.
+
+- `csw run work [-- <claude args>]` runs `claude` for that profile in this terminal only; `csw login work` does the same and tells you to `/login` once.
+- `eval "$(csw env work)"` exports `CLAUDE_CONFIG_DIR` in the current shell.
+- First use of a profile: if it is the active one and its live login has not expired, it is reused; otherwise csw tells you to run `/login` once, and Claude Code remembers it for that profile.
+- `csw use` keeps working as before for shells that do not set the variable.
+
+Limitations:
+- Claude Code only; Claude Desktop is selected with `--desktop` or `--all`.
+- csw links `~/.claude.<name>/.claude.json` to `~/.claude.<name>.json`. If Claude Code rewrites that file atomically the link may become a regular file, which `csw use` and `csw list` will no longer see updating.
+- IDE extensions may ignore `CLAUDE_CONFIG_DIR`.
 
 ## Linux
 
