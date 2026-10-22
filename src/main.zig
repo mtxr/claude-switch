@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const display = @import("display.zig");
+const bind = @import("bind.zig");
 const credentials = @import("credentials.zig");
 const keychain = @import("keychain.zig");
 const desktop = @import("desktop.zig");
@@ -19,6 +20,7 @@ comptime {
     _ = @import("desktop.zig");
     _ = @import("paths.zig");
     _ = @import("platform.zig");
+    _ = @import("bind.zig");
     _ = @import("credentials.zig");
     _ = @import("profile.zig");
     _ = @import("run.zig");
@@ -29,6 +31,7 @@ comptime {
 const KEYCHAIN_CODE = "Claude Code-credentials";
 const DESKTOP_FLAG = "--desktop";
 const ALL_FLAG = "--all";
+const FROM_CWD_FLAG = "--from-cwd";
 const GITHUB_REPO = "mtxr/claude-switch";
 const VERSION = "0.2.6"; // x-release-please-version
 const UPDATE_CACHE_FILE = "/tmp/csw-update-cache";
@@ -139,7 +142,8 @@ fn run(gpa: std.mem.Allocator, io: std.Io, args: []const []const u8) !void {
     const skip_check = std.mem.eql(u8, cmd, "update") or
         std.mem.eql(u8, cmd, "--version") or
         std.mem.eql(u8, cmd, "-v") or
-        std.mem.eql(u8, cmd, "env");
+        std.mem.eql(u8, cmd, "env") or
+        std.mem.eql(u8, cmd, "hook");
     if (!skip_check) checkUpdateSilent(gpa, io);
 
     if (args.len == 0) return profile.cmdPick(gpa, io, .{});
@@ -181,8 +185,16 @@ fn run(gpa: std.mem.Allocator, io: std.Io, args: []const []const u8) !void {
         return run_cmd.cmdRun(gpa, io, try needsName(args, "run"), args[2..]);
     } else if (std.mem.eql(u8, cmd, "login")) {
         return run_cmd.cmdLogin(gpa, io, try needsName(args, "login"));
+    } else if (std.mem.eql(u8, cmd, "env") and hasFlag(args, FROM_CWD_FLAG)) {
+        return bind.cmdEnvFromCwd(gpa, io);
     } else if (std.mem.eql(u8, cmd, "env")) {
         return run_cmd.cmdEnv(gpa, try needsName(args, "env"));
+    } else if (std.mem.eql(u8, cmd, "bind")) {
+        return bind.cmdBind(gpa, try needsName(args, "bind"));
+    } else if (std.mem.eql(u8, cmd, "unbind")) {
+        return bind.cmdUnbind(gpa);
+    } else if (std.mem.eql(u8, cmd, "hook")) {
+        return bind.cmdHook(try needsName(args, "hook"));
     } else if (std.mem.eql(u8, cmd, "logout-all")) {
         return profile.cmdLogoutAll(gpa, io, opts);
     } else if (std.mem.eql(u8, cmd, "--version") or std.mem.eql(u8, cmd, "-v")) {
@@ -237,6 +249,9 @@ fn printHelp() void {
         \\  run <name> [-- args]  Run claude with a profile in this terminal only
         \\  login <name>     Start claude for a profile and log in once
         \\  env <name>       Print `export CLAUDE_CONFIG_DIR=...` for a profile
+        \\  bind <name>      Bind the current directory to a profile (.csw)
+        \\  unbind           Remove the .csw binding from the current directory
+        \\  hook <shell>     Print the shell hook (zsh|bash): eval "$(csw hook zsh)"
         \\  doctor           Check that everything csw needs is in order
         \\
         \\OPTIONS:
