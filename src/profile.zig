@@ -1,6 +1,7 @@
 //! profile.zig — profile management
 
 const std = @import("std");
+const credentials = @import("credentials.zig");
 const desktop = @import("desktop.zig");
 const display = @import("display.zig");
 const keychain = @import("keychain.zig");
@@ -10,8 +11,7 @@ const session = @import("session.zig");
 
 const c = @import("c");
 
-const KEYCHAIN_CODE = "Claude Code-credentials";
-const KC_PROFILE_CODE = "csw-code-";
+const KEYCHAIN_CODE = credentials.DEFAULT_SERVICE;
 
 /// Which products a command acts on. Claude Code is the default; `--desktop`
 /// selects Claude Desktop only and `--all` selects both.
@@ -59,26 +59,17 @@ fn requireProfileIn(gpa: std.mem.Allocator, base: []const u8, name: []const u8) 
 }
 
 fn saveCodeIn(gpa: std.mem.Allocator, io: std.Io, h: []const u8, name: []const u8) !void {
-    var c_token: ?[]const u8 = null;
-    var c_acct: []const u8 = "";
-    if (comptime platform.supports_keychain) {
-        if (keychain.get(gpa, io, KEYCHAIN_CODE)) |token| {
-            display.info("Reading Claude Code session...");
-            c_token = token;
-            c_acct = keychain.getAccount(gpa, io, KEYCHAIN_CODE);
-        } else |_| {
-            display.info("Claude Code not available — skipping.");
-        }
-    }
-    defer if (c_token) |t| gpa.free(t);
-    defer if (c_acct.len > 0) gpa.free(c_acct);
+    const cur = try currentIn(gpa, h);
+    defer if (cur) |cur_owned| gpa.free(cur_owned);
+    const live_is_profile = cur == null or std.mem.eql(u8, cur.?, name);
 
+    if (comptime platform.supports_keychain) display.info("Reading Claude Code session...");
     try migrateToProfileIn(gpa, io, h, name);
 
-    if (c_token) |token| {
-        const svc = try std.fmt.allocPrint(gpa, "{s}{s}", .{ KC_PROFILE_CODE, name });
-        defer gpa.free(svc);
-        try keychain.set(gpa, io, svc, c_acct, token);
+    if (comptime platform.supports_keychain) {
+        var found = try credentials.capture(gpa, io, h, name, KEYCHAIN_CODE, live_is_profile);
+        if (!found and !live_is_profile) found = try credentials.capture(gpa, io, h, name, KEYCHAIN_CODE, true);
+        if (!found) display.info("Claude Code not available — skipping.");
     }
 
     const msg = try std.fmt.allocPrint(gpa, "Profile '{s}' saved", .{name});
@@ -132,19 +123,10 @@ fn useCodeIn(gpa: std.mem.Allocator, io: std.Io, h: []const u8, name: []const u8
         }
     }
 
-    const svc = try std.fmt.allocPrint(gpa, "{s}{s}", .{ KC_PROFILE_CODE, name });
-    defer gpa.free(svc);
-
-    const c_token: ?[]const u8 = if (comptime platform.supports_keychain) keychain.get(gpa, io, svc) catch null else null;
-    defer if (c_token) |t| gpa.free(t);
-    const c_acct = keychain.getAccount(gpa, io, svc);
-    defer gpa.free(c_acct);
-
-    if (c_token) |token| {
+    if (try credentials.activate(gpa, io, h, name, KEYCHAIN_CODE)) {
         const msg = try std.fmt.allocPrint(gpa, "Switching Claude Code → {s}", .{name});
         defer gpa.free(msg);
         display.info(msg);
-        try keychain.set(gpa, io, KEYCHAIN_CODE, c_acct, token);
     }
 
     try switchLinksIn(gpa, h, name);
@@ -196,6 +178,7 @@ pub fn cmdNew(gpa: std.mem.Allocator, io: std.Io, name: []const u8, opts: Option
     try desktop.mkdirAllC(gpa, p_dir);
 
     if (opts.code) {
+        if (previous) |p| _ = try credentials.capture(gpa, io, h, p, KEYCHAIN_CODE, true);
         keychain.delete(gpa, io, KEYCHAIN_CODE) catch {};
         try switchLinksIn(gpa, h, name);
     }
@@ -305,9 +288,7 @@ fn deleteCodeIn(gpa: std.mem.Allocator, io: std.Io, h: []const u8, name: []const
         }
     }
 
-    const svc = try std.fmt.allocPrint(gpa, "{s}{s}", .{ KC_PROFILE_CODE, name });
-    defer gpa.free(svc);
-    keychain.delete(gpa, io, svc) catch {};
+    try credentials.forget(gpa, io, h, name);
 
     if (desktop.pathExists(gpa, p_json)) desktop.deletePathC(gpa, p_json);
     if (desktop.pathExists(gpa, p_dir)) try deleteTreeC(gpa, io, p_dir);
@@ -1167,9 +1148,9 @@ test "full command flow in a temporary HOME (without Desktop only)" {
         defer if (active) |a| alloc.free(a);
         try std.testing.expectEqualStrings("work", active.?);
     }
-    const credentials = try keychain.get(alloc, io, KEYCHAIN_CODE);
-    defer alloc.free(credentials);
-    try std.testing.expect(std.mem.indexOf(u8, credentials, "max") != null);
+    const stored = try keychain.get(alloc, io, KEYCHAIN_CODE);
+    defer alloc.free(stored);
+    try std.testing.expect(std.mem.indexOf(u8, stored, "max") != null);
 
     try std.testing.expectError(error.ProfileNotFound, cmdUse(alloc, io, "ghost", .{}));
     try std.testing.expectError(error.ProfileNotFound, cmdDelete(alloc, io, "ghost", .{}));
