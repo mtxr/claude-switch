@@ -58,7 +58,7 @@ pub fn launch(gpa: std.mem.Allocator, io: std.Io) void {
 pub fn ownerIn(gpa: std.mem.Allocator, base: []const u8) !?[]const u8 {
     const marker = try ownerFileIn(gpa, base);
     defer gpa.free(marker);
-    const marker_z = try gpa.dupeZ(u8, marker);
+    const marker_z = try gpa.dupeSentinel(u8, marker, 0);
     defer gpa.free(marker_z);
 
     const fd = std.c.open(marker_z, .{ .ACCMODE = .RDONLY });
@@ -75,7 +75,7 @@ pub fn ownerIn(gpa: std.mem.Allocator, base: []const u8) !?[]const u8 {
 pub fn writeOwnerIn(gpa: std.mem.Allocator, base: []const u8, name: []const u8) void {
     const marker = ownerFileIn(gpa, base) catch return;
     defer gpa.free(marker);
-    const marker_z = gpa.dupeZ(u8, marker) catch return;
+    const marker_z = gpa.dupeSentinel(u8, marker, 0) catch return;
     defer gpa.free(marker_z);
     const fd = std.c.open(marker_z, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, @as(std.c.mode_t, 0o644));
     if (fd < 0) return;
