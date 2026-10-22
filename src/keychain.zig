@@ -79,6 +79,20 @@ pub fn get(gpa: std.mem.Allocator, io: std.Io, service: []const u8) ![]const u8 
     return gpa.dupe(u8, trimmed);
 }
 
+pub fn exists(gpa: std.mem.Allocator, io: std.Io, service: []const u8) bool {
+    const result = std.process.run(gpa, io, .{
+        .argv = &.{ "security", "find-generic-password", "-s", service },
+        .stdout_limit = .limited(64 * 1024),
+        .stderr_limit = .limited(1024),
+    }) catch return false;
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+    return switch (result.term) {
+        .exited => |code| code == 0,
+        else => false,
+    };
+}
+
 pub fn getAccount(gpa: std.mem.Allocator, io: std.Io, service: []const u8) []const u8 {
     if (comptime !platform.supports_keychain) return gpa.dupe(u8, "user") catch "user";
     const result = std.process.run(gpa, io, .{
@@ -317,4 +331,19 @@ test "platform without keychain refuses writes and deletes" {
     const account = getAccount(std.testing.allocator, io, "s");
     defer std.testing.allocator.free(account);
     try std.testing.expectEqualStrings("user", account);
+}
+
+test "exists reflects whether the entry is present" {
+    const alloc = std.testing.allocator;
+    var tio = std.Io.Threaded.init(std.heap.page_allocator, .{});
+    defer tio.deinit();
+    const io = tio.io();
+    const svc = try std.fmt.allocPrint(alloc, "csw-test-{d}-exists", .{@as(i64, c_time.time(null))});
+    defer alloc.free(svc);
+    delete(alloc, io, svc) catch {};
+    defer delete(alloc, io, svc) catch {};
+
+    try std.testing.expect(!exists(alloc, io, svc));
+    try set(alloc, io, svc, "user", "value");
+    try std.testing.expect(exists(alloc, io, svc));
 }

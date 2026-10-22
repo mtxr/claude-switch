@@ -8,6 +8,7 @@ const desktop = @import("desktop.zig");
 const paths = @import("paths.zig");
 const platform = @import("platform.zig");
 const profile = @import("profile.zig");
+const run_cmd = @import("run.zig");
 const session = @import("session.zig");
 const version = @import("version.zig");
 
@@ -18,7 +19,9 @@ comptime {
     _ = @import("desktop.zig");
     _ = @import("paths.zig");
     _ = @import("platform.zig");
+    _ = @import("credentials.zig");
     _ = @import("profile.zig");
+    _ = @import("run.zig");
     _ = @import("session.zig");
     _ = @import("version.zig");
 }
@@ -135,7 +138,8 @@ fn run(gpa: std.mem.Allocator, io: std.Io, args: []const []const u8) !void {
 
     const skip_check = std.mem.eql(u8, cmd, "update") or
         std.mem.eql(u8, cmd, "--version") or
-        std.mem.eql(u8, cmd, "-v");
+        std.mem.eql(u8, cmd, "-v") or
+        std.mem.eql(u8, cmd, "env");
     if (!skip_check) checkUpdateSilent(gpa, io);
 
     if (args.len == 0) return profile.cmdPick(gpa, io, .{});
@@ -173,6 +177,12 @@ fn run(gpa: std.mem.Allocator, io: std.Io, args: []const []const u8) !void {
     } else if (std.mem.eql(u8, cmd, "update")) {
         const verbose = args.len >= 2 and std.mem.eql(u8, args[1], "--verbose");
         return cmdUpdate(gpa, io, verbose);
+    } else if (std.mem.eql(u8, cmd, "run")) {
+        return run_cmd.cmdRun(gpa, io, try needsName(args, "run"), args[2..]);
+    } else if (std.mem.eql(u8, cmd, "login")) {
+        return run_cmd.cmdLogin(gpa, io, try needsName(args, "login"));
+    } else if (std.mem.eql(u8, cmd, "env")) {
+        return run_cmd.cmdEnv(gpa, try needsName(args, "env"));
     } else if (std.mem.eql(u8, cmd, "logout-all")) {
         return profile.cmdLogoutAll(gpa, io, opts);
     } else if (std.mem.eql(u8, cmd, "--version") or std.mem.eql(u8, cmd, "-v")) {
@@ -224,6 +234,9 @@ fn printHelp() void {
         \\  pick             Interactive profile picker (sk / fzf)
         \\  update [--verbose]  Update csw to the latest release
         \\  logout-all       Log out and remove all active symlinks
+        \\  run <name> [-- args]  Run claude with a profile in this terminal only
+        \\  login <name>     Start claude for a profile and log in once
+        \\  env <name>       Print `export CLAUDE_CONFIG_DIR=...` for a profile
         \\  doctor           Check that everything csw needs is in order
         \\
         \\OPTIONS:
