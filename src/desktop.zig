@@ -7,9 +7,7 @@ const keychain = @import("keychain.zig");
 const paths = @import("paths.zig");
 const platform = @import("platform.zig");
 
-const c = if (platform.supports_desktop) @cImport({
-    @cInclude("sqlite3.h");
-}) else struct {};
+const c = if (platform.supports_desktop) @import("c") else struct {};
 
 const KEYCHAIN_DESKTOP = "Claude Safe Storage";
 const OWNER_FILE = ".csw-profile";
@@ -60,7 +58,7 @@ pub fn launch(gpa: std.mem.Allocator, io: std.Io) void {
 pub fn ownerIn(gpa: std.mem.Allocator, base: []const u8) !?[]const u8 {
     const marker = try ownerFileIn(gpa, base);
     defer gpa.free(marker);
-    const marker_z = try gpa.dupeZ(u8, marker);
+    const marker_z = try gpa.dupeSentinel(u8, marker, 0);
     defer gpa.free(marker_z);
 
     const fd = std.c.open(marker_z, .{ .ACCMODE = .RDONLY });
@@ -77,7 +75,7 @@ pub fn ownerIn(gpa: std.mem.Allocator, base: []const u8) !?[]const u8 {
 pub fn writeOwnerIn(gpa: std.mem.Allocator, base: []const u8, name: []const u8) void {
     const marker = ownerFileIn(gpa, base) catch return;
     defer gpa.free(marker);
-    const marker_z = gpa.dupeZ(u8, marker) catch return;
+    const marker_z = gpa.dupeSentinel(u8, marker, 0) catch return;
     defer gpa.free(marker_z);
     const fd = std.c.open(marker_z, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, @as(std.c.mode_t, 0o644));
     if (fd < 0) return;
@@ -142,7 +140,7 @@ pub fn getSessionKey(gpa: std.mem.Allocator, io: std.Io) ![]const u8 {
 pub fn hasDataIn(gpa: std.mem.Allocator, base: []const u8, name: []const u8) bool {
     const d = paths.desktopProfileDirIn(gpa, base, name) catch return false;
     defer gpa.free(d);
-    const d_z = gpa.dupeZ(u8, d) catch return false;
+    const d_z = gpa.dupeSentinel(u8, d, 0) catch return false;
     defer gpa.free(d_z);
     const dir_handle = std.c.opendir(d_z) orelse return false;
     defer _ = std.c.closedir(dir_handle);
@@ -222,7 +220,7 @@ pub fn getSessionKeyWithKeyIn(gpa: std.mem.Allocator, base: []const u8, raw_key:
 
     const key = crypto.deriveKey(raw_key);
 
-    const db_path_z = try gpa.dupeZ(u8, cookies_path);
+    const db_path_z = try gpa.dupeSentinel(u8, cookies_path, 0);
     defer gpa.free(db_path_z);
 
     var db: ?*c.sqlite3 = null;
@@ -256,20 +254,20 @@ pub fn getSessionKeyWithKeyIn(gpa: std.mem.Allocator, base: []const u8, raw_key:
 }
 
 pub fn pathExists(gpa: std.mem.Allocator, path: []const u8) bool {
-    const path_z = gpa.dupeZ(u8, path) catch return false;
+    const path_z = gpa.dupeSentinel(u8, path, 0) catch return false;
     defer gpa.free(path_z);
     return std.c.access(path_z, 0) == 0;
 }
 
 pub fn isSymlink(gpa: std.mem.Allocator, path: []const u8) bool {
-    const path_z = gpa.dupeZ(u8, path) catch return false;
+    const path_z = gpa.dupeSentinel(u8, path, 0) catch return false;
     defer gpa.free(path_z);
     var buf: [std.fs.max_path_bytes]u8 = undefined;
     return std.c.readlink(path_z, &buf, buf.len) >= 0;
 }
 
 pub fn readLinkC(gpa: std.mem.Allocator, path: []const u8, buf: []u8) !usize {
-    const path_z = try gpa.dupeZ(u8, path);
+    const path_z = try gpa.dupeSentinel(u8, path, 0);
     defer gpa.free(path_z);
     const n = std.c.readlink(path_z, buf.ptr, buf.len);
     if (n < 0) return error.NotASymlink;
@@ -277,21 +275,21 @@ pub fn readLinkC(gpa: std.mem.Allocator, path: []const u8, buf: []u8) !usize {
 }
 
 pub fn deletePathC(gpa: std.mem.Allocator, path: []const u8) void {
-    const path_z = gpa.dupeZ(u8, path) catch return;
+    const path_z = gpa.dupeSentinel(u8, path, 0) catch return;
     defer gpa.free(path_z);
     _ = std.c.unlink(path_z);
 }
 
 pub fn deleteDirC(gpa: std.mem.Allocator, path: []const u8) void {
-    const path_z = gpa.dupeZ(u8, path) catch return;
+    const path_z = gpa.dupeSentinel(u8, path, 0) catch return;
     defer gpa.free(path_z);
     _ = std.c.rmdir(path_z);
 }
 
 pub fn renameC(gpa: std.mem.Allocator, old: []const u8, new: []const u8) !void {
-    const old_z = try gpa.dupeZ(u8, old);
+    const old_z = try gpa.dupeSentinel(u8, old, 0);
     defer gpa.free(old_z);
-    const new_z = try gpa.dupeZ(u8, new);
+    const new_z = try gpa.dupeSentinel(u8, new, 0);
     defer gpa.free(new_z);
     if (std.c.rename(old_z, new_z) != 0) return error.RenameFailed;
 }
@@ -301,7 +299,7 @@ pub fn mkdirAllC(gpa: std.mem.Allocator, abs_path: []const u8) !void {
     while (i <= abs_path.len) : (i += 1) {
         if (i < abs_path.len and abs_path[i] != '/') continue;
         const segment = abs_path[0..i];
-        const seg_z = try gpa.dupeZ(u8, segment);
+        const seg_z = try gpa.dupeSentinel(u8, segment, 0);
         defer gpa.free(seg_z);
         _ = std.c.mkdir(seg_z, 0o755);
     }
@@ -316,7 +314,7 @@ pub fn hasSessionKeyCookie(gpa: std.mem.Allocator, base: []const u8) bool {
 
     if (!pathExists(gpa, cookies_path)) return false;
 
-    const db_path_z = gpa.dupeZ(u8, cookies_path) catch return false;
+    const db_path_z = gpa.dupeSentinel(u8, cookies_path, 0) catch return false;
     defer gpa.free(db_path_z);
 
     var db: ?*c.sqlite3 = null;
@@ -356,7 +354,7 @@ test "hasData is true when dir has files" {
 
     const file_path = try std.fs.path.join(alloc, &.{ dir_path, "somefile" });
     defer alloc.free(file_path);
-    const fp_z = try alloc.dupeZ(u8, file_path);
+    const fp_z = try alloc.dupeSentinel(u8, file_path, 0);
     defer alloc.free(fp_z);
     const fd = std.c.open(fp_z, .{ .ACCMODE = .WRONLY, .CREAT = true }, @as(std.c.mode_t, 0o644));
     if (fd >= 0) _ = std.c.close(fd);
@@ -383,7 +381,7 @@ test "swap moves dirs correctly" {
     try mkdirAllC(alloc, dd);
     const marker_path = try std.fs.path.join(alloc, &.{ dd, "marker" });
     defer alloc.free(marker_path);
-    const mp_z = try alloc.dupeZ(u8, marker_path);
+    const mp_z = try alloc.dupeSentinel(u8, marker_path, 0);
     defer alloc.free(mp_z);
     const fd = std.c.open(mp_z, .{ .ACCMODE = .WRONLY, .CREAT = true }, @as(std.c.mode_t, 0o644));
     if (fd >= 0) _ = std.c.close(fd);
@@ -391,7 +389,7 @@ test "swap moves dirs correctly" {
     try mkdirAllC(alloc, d_personal);
     const pfile_path = try std.fs.path.join(alloc, &.{ d_personal, "pfile" });
     defer alloc.free(pfile_path);
-    const pp_z = try alloc.dupeZ(u8, pfile_path);
+    const pp_z = try alloc.dupeSentinel(u8, pfile_path, 0);
     defer alloc.free(pp_z);
     const fd2 = std.c.open(pp_z, .{ .ACCMODE = .WRONLY, .CREAT = true }, @as(std.c.mode_t, 0o644));
     if (fd2 >= 0) _ = std.c.close(fd2);
@@ -543,7 +541,7 @@ fn makeCookiesDb(alloc: std.mem.Allocator, base: []const u8, raw_key: []const u8
     const encrypted = try crypto.encryptV10(alloc, token, key);
     defer alloc.free(encrypted);
 
-    const db_path_z = try alloc.dupeZ(u8, db_path);
+    const db_path_z = try alloc.dupeSentinel(u8, db_path, 0);
     defer alloc.free(db_path_z);
 
     var db: ?*c.sqlite3 = null;

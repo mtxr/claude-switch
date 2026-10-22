@@ -2,9 +2,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
-const c = @cImport({
-    @cInclude("time.h");
-});
+const c = @import("c");
 
 fn writeStdout(bytes: []const u8) void {
     const fd = if (builtin.is_test) std.posix.STDERR_FILENO else std.posix.STDOUT_FILENO;

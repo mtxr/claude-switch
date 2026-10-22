@@ -6,7 +6,7 @@
 //! directory through a symlink.
 
 const std = @import("std");
-const c_time = @cImport(@cInclude("time.h"));
+const c_time = @import("c");
 const paths = @import("paths.zig");
 const platform = @import("platform.zig");
 
@@ -30,7 +30,7 @@ pub fn credentialsPathIn(gpa: std.mem.Allocator, base: []const u8, service: []co
 pub fn fileGetIn(gpa: std.mem.Allocator, base: []const u8, service: []const u8) ![]const u8 {
     const path = (try credentialsPathIn(gpa, base, service)) orelse return error.KeychainNotFound;
     defer gpa.free(path);
-    const path_z = try gpa.dupeZ(u8, path);
+    const path_z = try gpa.dupeSentinel(u8, path, 0);
     defer gpa.free(path_z);
 
     const fd = std.c.open(path_z, .{}, @as(std.c.mode_t, 0));
@@ -210,7 +210,7 @@ fn writeCredentials(alloc: std.mem.Allocator, dir: []const u8, content: []const 
     try @import("desktop.zig").mkdirAllC(alloc, dir);
     const file = try std.fs.path.join(alloc, &.{ dir, CREDENTIALS_FILE });
     defer alloc.free(file);
-    const file_z = try alloc.dupeZ(u8, file);
+    const file_z = try alloc.dupeSentinel(u8, file, 0);
     defer alloc.free(file_z);
     const fd = std.c.open(file_z, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, @as(std.c.mode_t, 0o600));
     try std.testing.expect(fd >= 0);
@@ -296,9 +296,9 @@ test "fileGetIn follows the active profile symlink" {
 
     const link = try paths.claudeDirIn(alloc, base);
     defer alloc.free(link);
-    const link_z = try alloc.dupeZ(u8, link);
+    const link_z = try alloc.dupeSentinel(u8, link, 0);
     defer alloc.free(link_z);
-    const target_z = try alloc.dupeZ(u8, profile_dir);
+    const target_z = try alloc.dupeSentinel(u8, profile_dir, 0);
     defer alloc.free(target_z);
     try std.testing.expectEqual(@as(c_int, 0), std.c.symlink(target_z, link_z));
 

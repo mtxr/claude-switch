@@ -24,7 +24,7 @@ pub fn decryptV10(allocator: std.mem.Allocator, encrypted: []const u8, key: [16]
     const data = encrypted[3..];
     if (data.len == 0 or data.len % 16 != 0) return error.BadBlockSize;
 
-    const iv = [_]u8{' '} ** 16;
+    const iv: [16]u8 = @splat(' ');
 
     var buf = try allocator.alloc(u8, data.len);
     defer allocator.free(buf);
@@ -93,17 +93,17 @@ test "decryptV10 finds sk-ant amid noise" {
 }
 
 test "decryptV10 rejects short input" {
-    try std.testing.expectError(error.TooShort, decryptV10(std.testing.allocator, "v1", [_]u8{0} ** 16));
+    try std.testing.expectError(error.TooShort, decryptV10(std.testing.allocator, "v1", @as([16]u8, @splat(0))));
 }
 
 test "decryptV10 rejects wrong block size" {
-    try std.testing.expectError(error.BadBlockSize, decryptV10(std.testing.allocator, "v10xxxxxxx", [_]u8{0} ** 16));
+    try std.testing.expectError(error.BadBlockSize, decryptV10(std.testing.allocator, "v10xxxxxxx", @as([16]u8, @splat(0))));
 }
 
 /// Encrypts plaintext in Chrome's v10 format (PKCS7 + AES-128-CBC).
 /// Used by the crypto and desktop tests. Caller frees the returned slice.
 pub fn encryptV10(allocator: std.mem.Allocator, plaintext: []const u8, key: [16]u8) ![]u8 {
-    const iv = [_]u8{' '} ** 16;
+    const iv: [16]u8 = @splat(' ');
 
     const pad_len = 16 - (plaintext.len % 16);
     const padded_len = plaintext.len + pad_len;
