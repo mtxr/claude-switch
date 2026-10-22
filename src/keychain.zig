@@ -149,7 +149,7 @@ pub fn delete(gpa: std.mem.Allocator, io: std.Io, service: []const u8) !void {
     gpa.free(result.stderr);
 }
 
-fn realKeychainEnabled() bool {
+pub fn realKeychainEnabled() bool {
     if (!platform.supports_keychain) return false;
     const v = std.c.getenv("CSW_TEST_KEYCHAIN") orelse return false;
     return std.mem.eql(u8, std.mem.sliceTo(v, 0), "1");
@@ -334,6 +334,7 @@ test "platform without keychain refuses writes and deletes" {
 }
 
 test "exists reflects whether the entry is present" {
+    if (!realKeychainEnabled()) return error.SkipZigTest;
     const alloc = std.testing.allocator;
     var tio = std.Io.Threaded.init(std.heap.page_allocator, .{});
     defer tio.deinit();
