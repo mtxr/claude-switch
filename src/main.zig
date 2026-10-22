@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const display = @import("display.zig");
+const credentials = @import("credentials.zig");
 const keychain = @import("keychain.zig");
 const desktop = @import("desktop.zig");
 const paths = @import("paths.zig");
@@ -23,7 +24,6 @@ comptime {
 }
 
 const KEYCHAIN_CODE = "Claude Code-credentials";
-const KC_PROFILE_CODE = "csw-code-";
 const DESKTOP_FLAG = "--desktop";
 const ALL_FLAG = "--all";
 const GITHUB_REPO = "mtxr/claude-switch";
@@ -453,10 +453,8 @@ fn cmdWhoami(gpa: std.mem.Allocator, io: std.Io) !void {
             const is_desktop = desktop_owner != null and std.mem.eql(u8, p, desktop_owner.?);
             const marker = profile.listMarker(is_active, is_desktop, profile.Options.both);
 
-            const svc = try std.fmt.allocPrint(gpa, "{s}{s}", .{ KC_PROFILE_CODE, p });
-            defer gpa.free(svc);
-
-            if (keychain.get(gpa, io, svc)) |token| {
+            const stored = try credentials.readProfile(gpa, io, h, p);
+            if (stored) |token| {
                 defer gpa.free(token);
                 if (std.json.parseFromSlice(std.json.Value, gpa, token, .{})) |parsed| {
                     defer parsed.deinit();
@@ -478,7 +476,7 @@ fn cmdWhoami(gpa: std.mem.Allocator, io: std.Io) !void {
                 } else |_| {
                     display.print("  • {s}{s}\n", .{ p, marker });
                 }
-            } else |_| {
+            } else {
                 display.print("  • {s}{s}\n", .{ p, marker });
             }
         }

@@ -135,8 +135,8 @@ csw does not create any files or directories of its own. All session tokens are 
 
 | Data | Where it lives |
 |---|---|
-| Claude Code tokens | Keychain: `csw-code-<profile>` |
-| Active Code session | Keychain: `Claude Code-credentials` (managed by Claude) |
+| Claude Code tokens | Keychain: `Claude Code-credentials-<hash>`, the per-directory entry Claude Code itself uses for `~/.claude.<profile>` |
+| Active Code session | Keychain: `Claude Code-credentials` (managed by Claude; `csw use` copies the profile login here) |
 | Active Desktop session | Electron SQLite cookie, AES-128-CBC encrypted (managed by Claude Desktop) |
 | Desktop encryption key | Keychain: `Claude Safe Storage` (managed by Claude Desktop) |
 | Profile configs | `~/.claude.<profile>.json` + `~/.claude.<profile>/` |
