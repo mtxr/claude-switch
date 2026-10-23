@@ -61,6 +61,9 @@
         };
 
       mkTests = { pkgs, zig }:
+        let
+          target = muslTarget.${pkgs.stdenv.hostPlatform.system} or null;
+        in
         pkgs.stdenv.mkDerivation {
           pname = "csw-tests";
           inherit version;
@@ -72,7 +75,8 @@
           buildPhase = ''
             export HOME=$TMPDIR
             export ZIG_GLOBAL_CACHE_DIR=$TMPDIR/zig-global-cache
-            zig build test --cache-dir $TMPDIR/zig-cache
+            zig build test --cache-dir $TMPDIR/zig-cache \
+              ${lib.optionalString (target != null) "-Dtarget=${target}"}
             touch $out
           '';
         };
