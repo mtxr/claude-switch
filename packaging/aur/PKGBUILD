@@ -5,6 +5,7 @@ pkgdesc="Switch between Claude Code and Claude Desktop accounts"
 arch=('x86_64' 'aarch64')
 url="https://github.com/mtxr/claude-switch"
 license=('MIT')
+optdepends=('fzf: fuzzy profile picker' 'skim: fuzzy profile picker')
 provides=('csw' 'claude-switch')
 conflicts=('csw' 'claude-switch')
 source=("LICENSE-${pkgver}::https://raw.githubusercontent.com/mtxr/claude-switch/v${pkgver}/LICENSE")
@@ -20,4 +21,6 @@ package() {
   install -Dm644 "${srcdir}/LICENSE-${pkgver}" "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
   "${pkgdir}/usr/bin/csw" completion bash | install -Dm644 /dev/stdin "${pkgdir}/usr/share/bash-completion/completions/csw"
   "${pkgdir}/usr/bin/csw" completion zsh | install -Dm644 /dev/stdin "${pkgdir}/usr/share/zsh/site-functions/_csw"
+  "${pkgdir}/usr/bin/csw" completion fish | install -Dm644 /dev/stdin "${pkgdir}/usr/share/fish/vendor_completions.d/csw.fish"
+  "${pkgdir}/usr/bin/csw" man | gzip -9n | install -Dm644 /dev/stdin "${pkgdir}/usr/share/man/man1/csw.1.gz"
 }

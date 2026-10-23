@@ -31,6 +31,8 @@ class Csw < Formula
     bin.install_symlink "csw" => "claude-switch"
     (bash_completion/"csw").write Utils.safe_popen_read(bin/"csw", "completion", "bash")
     (zsh_completion/"_csw").write Utils.safe_popen_read(bin/"csw", "completion", "zsh")
+    (fish_completion/"csw.fish").write Utils.safe_popen_read(bin/"csw", "completion", "fish")
+    (man1/"csw.1").write Utils.safe_popen_read(bin/"csw", "man")
   end
 
   def caveats
@@ -38,6 +40,9 @@ class Csw < Formula
       To switch profiles per directory, add this to your shell rc:
         eval "$(csw hook zsh)"   # or: eval "$(csw hook bash)"
       The hook also registers shell completions.
+
+      An interactive picker is built in. Install sk or fzf for fuzzy search:
+        brew install sk
     EOS
   end
 

@@ -32,7 +32,7 @@
           inherit version;
           src = lib.cleanSource ./.;
 
-          nativeBuildInputs = [ zig pkgs.pkg-config pkgs.makeWrapper pkgs.installShellFiles ];
+          nativeBuildInputs = [ zig pkgs.pkg-config pkgs.installShellFiles ];
           buildInputs = [ pkgs.sqlite ];
 
           dontConfigure = true;
@@ -46,8 +46,10 @@
               ${lib.optionalString (target != null) "-Dtarget=${target}"}
             installShellCompletion --cmd csw \
               --bash <($out/bin/csw completion bash) \
-              --zsh <($out/bin/csw completion zsh)
-            wrapProgram $out/bin/csw --suffix PATH : ${lib.makeBinPath [ pkgs.fzf pkgs.which ]}
+              --zsh <($out/bin/csw completion zsh) \
+              --fish <($out/bin/csw completion fish)
+            $out/bin/csw man > csw.1
+            installManPage csw.1
             runHook postBuild
           '';
 

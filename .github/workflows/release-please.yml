@@ -187,12 +187,13 @@ jobs:
         run: |
           gh auth setup-git
           gh repo clone mtxr/homebrew-tap tap
-          mkdir -p tap/Formula
+          mkdir -p tap/Formula tap/Aliases
           cp csw.rb tap/Formula/csw.rb
+          ln -sfn ../Formula/csw.rb tap/Aliases/claude-switch
           cd tap
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add Formula/csw.rb
+          git add Formula/csw.rb Aliases/claude-switch
           if git diff --cached --quiet; then
             echo "Formula already up to date"
           else
