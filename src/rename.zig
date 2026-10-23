@@ -9,6 +9,7 @@ const keychain = @import("keychain.zig");
 const paths = @import("paths.zig");
 const profile = @import("profile.zig");
 const run = @import("run.zig");
+const testutil = @import("testutil.zig");
 
 const c = @import("c");
 
@@ -497,10 +498,11 @@ test "renameWithCredentialsIn moves the per-dir login with the files" {
     var fx = try Fixture.init(alloc);
     defer fx.deinit(alloc);
 
-    const stamp = c.time(null);
-    const old = try std.fmt.allocPrint(alloc, "csw-test-{d}-ren-old", .{@as(i64, stamp)});
+    const token = try testutil.uniqueToken(alloc);
+    defer alloc.free(token);
+    const old = try std.fmt.allocPrint(alloc, "csw-test-{s}-ren-old", .{token});
     defer alloc.free(old);
-    const new = try std.fmt.allocPrint(alloc, "csw-test-{d}-ren-new", .{@as(i64, stamp)});
+    const new = try std.fmt.allocPrint(alloc, "csw-test-{s}-ren-new", .{token});
     defer alloc.free(new);
     try fx.addProfile(alloc, old);
 
@@ -529,10 +531,11 @@ test "renameWithCredentialsIn keeps the old login when the rename is refused" {
     var fx = try Fixture.init(alloc);
     defer fx.deinit(alloc);
 
-    const stamp = c.time(null);
-    const old = try std.fmt.allocPrint(alloc, "csw-test-{d}-keep-old", .{@as(i64, stamp)});
+    const token = try testutil.uniqueToken(alloc);
+    defer alloc.free(token);
+    const old = try std.fmt.allocPrint(alloc, "csw-test-{s}-keep-old", .{token});
     defer alloc.free(old);
-    const taken = try std.fmt.allocPrint(alloc, "csw-test-{d}-keep-new", .{@as(i64, stamp)});
+    const taken = try std.fmt.allocPrint(alloc, "csw-test-{s}-keep-new", .{token});
     defer alloc.free(taken);
     try fx.addProfile(alloc, old);
     try fx.addProfile(alloc, taken);
