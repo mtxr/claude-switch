@@ -171,6 +171,41 @@ fn readProfileFile(gpa: std.mem.Allocator, base: []const u8, name: []const u8) ?
     return keychain.fileGetIn(gpa, base, service) catch null;
 }
 
+/// True when the profile has a stored login: its per-dir (or legacy) Keychain
+/// entry on macOS, its credentials file on Linux. Read-only.
+pub fn hasLogin(gpa: std.mem.Allocator, io: std.Io, base: []const u8, name: []const u8) bool {
+    if (comptime !platform.supports_keychain) {
+        const blob = readProfileFile(gpa, base, name) orelse return false;
+        gpa.free(blob);
+        return true;
+    }
+    const dir_service = profileService(gpa, base, name) catch return false;
+    defer gpa.free(dir_service);
+    if (keychain.exists(gpa, io, dir_service)) return true;
+    return hasLegacy(gpa, io, name);
+}
+
+/// True when a legacy `csw-code-<name>` Keychain entry is still present.
+pub fn hasLegacy(gpa: std.mem.Allocator, io: std.Io, name: []const u8) bool {
+    if (comptime !platform.supports_keychain) return false;
+    const service = legacyService(gpa, name) catch return false;
+    defer gpa.free(service);
+    return keychain.exists(gpa, io, service);
+}
+
+/// Whether the per-dir login of a profile is byte-identical to the `live`
+/// entry; null when either is missing. Never migrates or writes.
+pub fn sameAsLive(gpa: std.mem.Allocator, io: std.Io, base: []const u8, name: []const u8, live: []const u8) ?bool {
+    if (comptime !platform.supports_keychain) return null;
+    const dir_service = profileService(gpa, base, name) catch return null;
+    defer gpa.free(dir_service);
+    const stored = read(gpa, io, dir_service) orelse return null;
+    defer gpa.free(stored);
+    const live_blob = read(gpa, io, live) orelse return null;
+    defer gpa.free(live_blob);
+    return std.mem.eql(u8, stored, live_blob);
+}
+
 pub fn forget(gpa: std.mem.Allocator, io: std.Io, base: []const u8, name: []const u8) !void {
     if (comptime !platform.supports_keychain) return;
     const dir_service = try profileService(gpa, base, name);
@@ -470,6 +505,54 @@ test "copyProfile copies the per-dir login and reports a missing one" {
     try std.testing.expect(try copyProfile(alloc, io, sb.base, "p", "q"));
     try expectEntry(alloc, io, to_service, fixture_new);
     try expectEntry(alloc, io, sb.dir_service, fixture_new);
+}
+
+test "hasLogin, hasLegacy and sameAsLive read without writing" {
+    if (!keychain.realKeychainEnabled()) return error.SkipZigTest;
+    const alloc = std.testing.allocator;
+    var tio = sandboxIo();
+    defer tio.deinit();
+    const io = tio.io();
+    const sb = try Sandbox.init(alloc, io, "has");
+    defer sb.deinit(alloc, io);
+
+    try std.testing.expect(!hasLogin(alloc, io, sb.base, "p"));
+    try std.testing.expect(!hasLegacy(alloc, io, "p"));
+    try std.testing.expectEqual(@as(?bool, null), sameAsLive(alloc, io, sb.base, "p", sb.live));
+
+    try put(alloc, io, sb.legacy_service, fixture_old);
+    try std.testing.expect(hasLogin(alloc, io, sb.base, "p"));
+    try std.testing.expect(hasLegacy(alloc, io, "p"));
+    try expectEntry(alloc, io, sb.dir_service, null);
+    keychain.delete(alloc, io, sb.legacy_service) catch {};
+
+    try put(alloc, io, sb.dir_service, fixture_old);
+    try std.testing.expect(hasLogin(alloc, io, sb.base, "p"));
+    try std.testing.expectEqual(@as(?bool, null), sameAsLive(alloc, io, sb.base, "p", sb.live));
+    try put(alloc, io, sb.live, fixture_old);
+    try std.testing.expectEqual(@as(?bool, true), sameAsLive(alloc, io, sb.base, "p", sb.live));
+    try put(alloc, io, sb.live, fixture_new);
+    try std.testing.expectEqual(@as(?bool, false), sameAsLive(alloc, io, sb.base, "p", sb.live));
+}
+
+test "hasLogin reads the credentials file without Keychain support" {
+    if (comptime platform.supports_keychain) return error.SkipZigTest;
+    const alloc = std.testing.allocator;
+    var tio = sandboxIo();
+    defer tio.deinit();
+    const io = tio.io();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const len = try tmp.dir.realPath(std.Options.debug_io, &buf);
+    const base = buf[0..len];
+
+    try std.testing.expect(!hasLogin(alloc, io, base, "p"));
+    try tmp.dir.createDir(std.Options.debug_io, ".claude.p", .default_dir);
+    try tmp.dir.writeFile(std.Options.debug_io, .{ .sub_path = ".claude.p/.credentials.json", .data = fixture_old });
+    try std.testing.expect(hasLogin(alloc, io, base, "p"));
+    try std.testing.expect(!hasLegacy(alloc, io, "p"));
+    try std.testing.expectEqual(@as(?bool, null), sameAsLive(alloc, io, base, "p", DEFAULT_SERVICE));
 }
 
 test "forget removes the per-dir and legacy entries" {

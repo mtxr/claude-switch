@@ -6,6 +6,7 @@ const bind = @import("bind.zig");
 const commands = @import("commands.zig");
 const completion = @import("completion.zig");
 const credentials = @import("credentials.zig");
+const doctor = @import("doctor.zig");
 const keychain = @import("keychain.zig");
 const desktop = @import("desktop.zig");
 const paths = @import("paths.zig");
@@ -27,6 +28,7 @@ comptime {
     _ = @import("commands.zig");
     _ = @import("completion.zig");
     _ = @import("credentials.zig");
+    _ = @import("doctor.zig");
     _ = @import("profile.zig");
     _ = @import("rename.zig");
     _ = @import("run.zig");
@@ -339,6 +341,13 @@ fn printHelp(gpa: std.mem.Allocator) void {
     , .{lines});
 }
 
+fn printDoctorReport(report: doctor.Report) void {
+    for (report.items.items) |item| switch (item.level) {
+        .ok => doctorOk(item.label, item.detail),
+        .warn => doctorWarn(item.label, item.detail),
+    };
+}
+
 fn doctorOk(label: []const u8, detail: []const u8) void {
     display.print("\x1b[32m  [ok]  \x1b[0m {s:<32} {s}\n", .{ label, detail });
 }
@@ -471,6 +480,23 @@ fn cmdDoctor(gpa: std.mem.Allocator, io: std.Io) !void {
         doctorWarn("Saved profiles", "none");
     }
     if (comptime platform.supports_desktop) try doctorDesktopOwner(gpa, h, active, profiles);
+
+    var profile_report: doctor.Report = .{};
+    defer profile_report.deinit(gpa);
+    try doctor.fileFindingsIn(gpa, h, profiles, &profile_report);
+    try doctor.loginFindings(gpa, io, h, profiles, &profile_report);
+    printDoctorReport(profile_report);
+
+    display.print("\n  Shell\n  ──────────────────────────────────\n", .{});
+    const cwd = try bind.currentDir(gpa);
+    defer gpa.free(cwd);
+    const bound = bind.envVar(bind.BOUND_VAR);
+    const current = bind.envVar("CLAUDE_CONFIG_DIR");
+    var shell_report: doctor.Report = .{};
+    defer shell_report.deinit(gpa);
+    try doctor.shellFindings(gpa, h, cwd, bound, current, &shell_report);
+    try doctor.overlapFindings(gpa, io, h, active, current, credentials.DEFAULT_SERVICE, &shell_report);
+    printDoctorReport(shell_report);
 
     display.print("\n  Tools\n  ──────────────────────────────────\n", .{});
 
