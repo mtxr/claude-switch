@@ -109,7 +109,8 @@ jobs:
             dpkg-deb -f /dist/csw_0.0.0_amd64.deb Suggests | grep -q fzf
             if dpkg-deb -f /dist/csw_0.0.0_amd64.deb Depends | grep -q "fzf\|skim"; then exit 1; fi
             apt-get remove -y -qq csw
-            if command -v csw; then exit 1; fi
+            test ! -e /usr/bin/csw
+            test ! -L /usr/bin/claude-switch
             test ! -e /usr/share/zsh/site-functions/_csw
             test ! -e /usr/share/fish/vendor_completions.d/csw.fish
             test ! -e /usr/share/man/man1/csw.1.gz
@@ -130,7 +131,8 @@ jobs:
             rpm -qp --suggests /dist/csw-0.0.0-1.x86_64.rpm | grep -q fzf
             if rpm -qp --requires /dist/csw-0.0.0-1.x86_64.rpm | grep -q "fzf\|skim"; then exit 1; fi
             rpm -e csw
-            if command -v csw; then exit 1; fi
+            test ! -e /usr/bin/csw
+            test ! -L /usr/bin/claude-switch
             test ! -e /usr/share/zsh/site-functions/_csw
             test ! -e /usr/share/fish/vendor_completions.d/csw.fish
             test ! -e /usr/share/man/man1/csw.1.gz
