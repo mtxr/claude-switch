@@ -29,6 +29,15 @@ cp zig-out/bin/csw ~/.local/bin/csw
 
 Grab the binary for your platform from [Releases](https://github.com/mtxr/claude-switch/releases), put it somewhere in your `$PATH`, and `chmod +x` it.
 
+### Verifying a download
+
+Every release ships a `SHA256SUMS` file, and each binary and `SHA256SUMS` carry a GitHub build provenance attestation. `install.sh` checks the checksum before installing and refuses to install on a mismatch. To verify a manual download:
+
+```bash
+shasum -a 256 -c SHA256SUMS --ignore-missing
+gh attestation verify csw-aarch64-apple-darwin --repo mtxr/claude-switch
+```
+
 ---
 
 Make sure `~/.local/bin` is in your `$PATH` (add to `~/.zshrc` if needed):
