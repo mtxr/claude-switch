@@ -1,6 +1,7 @@
 //! bind.zig — per-directory profiles (`.csw`) and the shell hook
 
 const std = @import("std");
+const completion = @import("completion.zig");
 const desktop = @import("desktop.zig");
 const display = @import("display.zig");
 const paths = @import("paths.zig");
@@ -13,7 +14,7 @@ const CONFIG_VAR = "CLAUDE_CONFIG_DIR";
 const MAX_NAME_LEN = 64;
 const MAX_FILE_BYTES = 256;
 
-pub const Shell = enum { zsh, bash };
+pub const Shell = completion.Shell;
 
 const ZSH_HOOK =
     \\__csw_hook() { eval "$(command csw env --from-cwd)"; }
@@ -81,12 +82,21 @@ pub fn cmdEnvFromCwd(gpa: std.mem.Allocator, io: std.Io) !void {
     display.print("{s}", .{script});
 }
 
-pub fn cmdHook(shell_name: []const u8) !void {
+pub fn cmdHook(gpa: std.mem.Allocator, shell_name: []const u8) !void {
     const shell = parseShell(shell_name) orelse {
         display.print("❌  Unsupported shell '{s}'. Use: csw hook zsh | bash\n", .{shell_name});
         return error.UnsupportedShell;
     };
-    display.print("{s}", .{hookScript(shell)});
+    const script = try renderHook(gpa, shell);
+    defer gpa.free(script);
+    display.print("{s}", .{script});
+}
+
+/// The hook followed by the completions, so one eval sets up both.
+pub fn renderHook(gpa: std.mem.Allocator, shell: Shell) ![]u8 {
+    const completions = try completion.render(gpa, shell);
+    defer gpa.free(completions);
+    return std.fmt.allocPrint(gpa, "{s}{s}", .{ hookScript(shell), completions });
 }
 
 pub fn isValidName(name: []const u8) bool {
@@ -106,9 +116,7 @@ pub fn parseBinding(content: []const u8) ?[]const u8 {
     return name;
 }
 
-pub fn parseShell(name: []const u8) ?Shell {
-    return std.meta.stringToEnum(Shell, name);
-}
+pub const parseShell = completion.parseShell;
 
 pub fn hookScript(shell: Shell) []const u8 {
     return switch (shell) {
@@ -293,6 +301,16 @@ test "isNewExport fires only for the first export of a dir" {
     try std.testing.expect(isNewExport("/h/.claude.b", "/h/.claude.a", "/h/.claude.a"));
     try std.testing.expect(!isNewExport("/h/.claude.a", "/h/.claude.a", "/h/.claude.a"));
     try std.testing.expect(!isNewExport("/h/.claude.a", null, "/h/.claude.manual"));
+}
+
+test "renderHook appends the completions to the hook" {
+    const alloc = std.testing.allocator;
+    for ([_]Shell{ .zsh, .bash }) |shell| {
+        const script = try renderHook(alloc, shell);
+        defer alloc.free(script);
+        try std.testing.expect(std.mem.startsWith(u8, script, hookScript(shell)));
+        try std.testing.expect(std.mem.indexOf(u8, script, "_csw()") != null);
+    }
 }
 
 test "parseShell and hookScript" {
