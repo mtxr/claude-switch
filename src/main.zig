@@ -38,6 +38,7 @@ comptime {
     _ = @import("rename.zig");
     _ = @import("run.zig");
     _ = @import("session.zig");
+    _ = @import("testutil.zig");
     _ = @import("update.zig");
     _ = @import("version.zig");
 }

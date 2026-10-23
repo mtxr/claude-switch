@@ -7,6 +7,7 @@ const desktop = @import("desktop.zig");
 const keychain = @import("keychain.zig");
 const paths = @import("paths.zig");
 const platform = @import("platform.zig");
+const testutil = @import("testutil.zig");
 const run = @import("run.zig");
 
 const c = @import("c");
@@ -385,7 +386,9 @@ test "loginFindings gathers from a temporary base" {
 
     var report: Report = .{};
     defer report.deinit(alloc);
-    const name = try std.fmt.allocPrint(alloc, "cswdoctor{d}", .{@as(i64, c.time(null))});
+    const token = try testutil.uniqueToken(alloc);
+    defer alloc.free(token);
+    const name = try std.fmt.allocPrint(alloc, "cswdoctor{s}", .{token});
     defer alloc.free(name);
     try loginFindings(alloc, io, base, &.{name}, &report);
     try expectFinding(report, "Stored logins", .warn, name);
@@ -407,7 +410,9 @@ test "overlapFindings compares the per-dir login with the live entry" {
 
     const dir_service = try credentials.profileService(alloc, base, "p");
     defer alloc.free(dir_service);
-    const live = try std.fmt.allocPrint(alloc, "csw-test-{d}-doctor-live", .{@as(i64, c.time(null))});
+    const token = try testutil.uniqueToken(alloc);
+    defer alloc.free(token);
+    const live = try std.fmt.allocPrint(alloc, "csw-test-{s}-doctor-live", .{token});
     defer alloc.free(live);
     keychain.delete(alloc, io, dir_service) catch {};
     keychain.delete(alloc, io, live) catch {};

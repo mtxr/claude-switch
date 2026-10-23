@@ -9,6 +9,7 @@ const std = @import("std");
 const c_time = @import("c");
 const paths = @import("paths.zig");
 const platform = @import("platform.zig");
+const testutil = @import("testutil.zig");
 
 const CODE_SERVICE = "Claude Code-credentials";
 const PROFILE_SERVICE_PREFIX = "csw-code-";
@@ -161,7 +162,9 @@ test "get on a missing service returns an error" {
     var tio = std.Io.Threaded.init(std.heap.page_allocator, .{});
     defer tio.deinit();
     const io = tio.io();
-    const svc = try std.fmt.allocPrint(alloc, "csw-test-{d}-missing", .{@as(i64, c_time.time(null))});
+    const token = try testutil.uniqueToken(alloc);
+    defer alloc.free(token);
+    const svc = try std.fmt.allocPrint(alloc, "csw-test-{s}-missing", .{token});
     defer alloc.free(svc);
     delete(alloc, io, svc) catch {};
     try std.testing.expectError(error.KeychainNotFound, get(alloc, io, svc));
@@ -173,7 +176,9 @@ test "set and get round-trip" {
     var tio = std.Io.Threaded.init(std.heap.page_allocator, .{});
     defer tio.deinit();
     const io = tio.io();
-    const svc = try std.fmt.allocPrint(alloc, "csw-test-{d}-rt", .{@as(i64, c_time.time(null))});
+    const token = try testutil.uniqueToken(alloc);
+    defer alloc.free(token);
+    const svc = try std.fmt.allocPrint(alloc, "csw-test-{s}-rt", .{token});
     defer alloc.free(svc);
     delete(alloc, io, svc) catch {};
     defer delete(alloc, io, svc) catch {};
@@ -190,7 +195,9 @@ test "set overwrites existing entry" {
     var tio = std.Io.Threaded.init(std.heap.page_allocator, .{});
     defer tio.deinit();
     const io = tio.io();
-    const svc = try std.fmt.allocPrint(alloc, "csw-test-{d}-ow", .{@as(i64, c_time.time(null))});
+    const token = try testutil.uniqueToken(alloc);
+    defer alloc.free(token);
+    const svc = try std.fmt.allocPrint(alloc, "csw-test-{s}-ow", .{token});
     defer alloc.free(svc);
     delete(alloc, io, svc) catch {};
     defer delete(alloc, io, svc) catch {};
@@ -208,7 +215,9 @@ test "delete of a missing entry does not fail" {
     var tio = std.Io.Threaded.init(std.heap.page_allocator, .{});
     defer tio.deinit();
     const io = tio.io();
-    const svc = try std.fmt.allocPrint(alloc, "csw-test-{d}-del", .{@as(i64, c_time.time(null))});
+    const token = try testutil.uniqueToken(alloc);
+    defer alloc.free(token);
+    const svc = try std.fmt.allocPrint(alloc, "csw-test-{s}-del", .{token});
     defer alloc.free(svc);
     delete(alloc, io, svc) catch {};
     try delete(alloc, io, svc);
@@ -339,7 +348,9 @@ test "exists reflects whether the entry is present" {
     var tio = std.Io.Threaded.init(std.heap.page_allocator, .{});
     defer tio.deinit();
     const io = tio.io();
-    const svc = try std.fmt.allocPrint(alloc, "csw-test-{d}-exists", .{@as(i64, c_time.time(null))});
+    const token = try testutil.uniqueToken(alloc);
+    defer alloc.free(token);
+    const svc = try std.fmt.allocPrint(alloc, "csw-test-{s}-exists", .{token});
     defer alloc.free(svc);
     delete(alloc, io, svc) catch {};
     defer delete(alloc, io, svc) catch {};

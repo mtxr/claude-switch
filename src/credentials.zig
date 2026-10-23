@@ -4,6 +4,7 @@ const std = @import("std");
 const keychain = @import("keychain.zig");
 const paths = @import("paths.zig");
 const platform = @import("platform.zig");
+const testutil = @import("testutil.zig");
 
 const c = @import("c");
 
@@ -324,18 +325,21 @@ const fixture_old = "{\"claudeAiOauth\":{\"expiresAt\":100}}";
 const fixture_new = "{\"claudeAiOauth\":{\"expiresAt\":200}}";
 
 const Sandbox = struct {
+    name: []const u8,
     base: []const u8,
     live: []const u8,
     dir_service: []const u8,
     legacy_service: []const u8,
 
     fn init(alloc: std.mem.Allocator, io: std.Io, tag: []const u8) !Sandbox {
-        const stamp = c.time(null);
-        const base = try std.fmt.allocPrint(alloc, "/tmp/csw-cred-test-{d}-{s}", .{ @as(i64, stamp), tag });
-        const live = try std.fmt.allocPrint(alloc, "csw-test-{d}-{s}-live", .{ @as(i64, stamp), tag });
-        const dir_service = try profileService(alloc, base, "p");
-        const legacy_service = try legacyService(alloc, "p");
-        const sandbox: Sandbox = .{ .base = base, .live = live, .dir_service = dir_service, .legacy_service = legacy_service };
+        const token = try testutil.uniqueToken(alloc);
+        defer alloc.free(token);
+        const name = try std.fmt.allocPrint(alloc, "p{s}", .{token});
+        const base = try std.fmt.allocPrint(alloc, "/tmp/csw-cred-test-{s}-{s}", .{ token, tag });
+        const live = try std.fmt.allocPrint(alloc, "csw-test-{s}-{s}-live", .{ token, tag });
+        const dir_service = try profileService(alloc, base, name);
+        const legacy_service = try legacyService(alloc, name);
+        const sandbox: Sandbox = .{ .name = name, .base = base, .live = live, .dir_service = dir_service, .legacy_service = legacy_service };
         sandbox.wipe(alloc, io);
         return sandbox;
     }
@@ -346,6 +350,7 @@ const Sandbox = struct {
 
     fn deinit(self: Sandbox, alloc: std.mem.Allocator, io: std.Io) void {
         self.wipe(alloc, io);
+        alloc.free(self.name);
         alloc.free(self.base);
         alloc.free(self.live);
         alloc.free(self.dir_service);
@@ -382,7 +387,7 @@ test "migrateLegacy keeps the fresher legacy token and removes the legacy entry"
 
     try put(alloc, io, sb.legacy_service, fixture_new);
     try put(alloc, io, sb.dir_service, fixture_old);
-    try migrateLegacy(alloc, io, sb.base, "p");
+    try migrateLegacy(alloc, io, sb.base, sb.name);
     try expectEntry(alloc, io, sb.dir_service, fixture_new);
     try expectEntry(alloc, io, sb.legacy_service, null);
 }
@@ -398,7 +403,7 @@ test "migrateLegacy keeps a fresher per-dir token and still removes the legacy e
 
     try put(alloc, io, sb.legacy_service, fixture_old);
     try put(alloc, io, sb.dir_service, fixture_new);
-    try migrateLegacy(alloc, io, sb.base, "p");
+    try migrateLegacy(alloc, io, sb.base, sb.name);
     try expectEntry(alloc, io, sb.dir_service, fixture_new);
     try expectEntry(alloc, io, sb.legacy_service, null);
 }
@@ -412,7 +417,7 @@ test "migrateLegacy does nothing without a legacy entry" {
     const sb = try Sandbox.init(alloc, io, "mig-none");
     defer sb.deinit(alloc, io);
 
-    try migrateLegacy(alloc, io, sb.base, "p");
+    try migrateLegacy(alloc, io, sb.base, sb.name);
     try expectEntry(alloc, io, sb.dir_service, null);
 }
 
@@ -425,17 +430,17 @@ test "capture stores the live login only when it is allowed and fresher" {
     const sb = try Sandbox.init(alloc, io, "cap");
     defer sb.deinit(alloc, io);
 
-    try std.testing.expect(!try capture(alloc, io, sb.base, "p", sb.live, true));
+    try std.testing.expect(!try capture(alloc, io, sb.base, sb.name, sb.live, true));
 
     try put(alloc, io, sb.live, fixture_new);
-    try std.testing.expect(!try capture(alloc, io, sb.base, "p", sb.live, false));
+    try std.testing.expect(!try capture(alloc, io, sb.base, sb.name, sb.live, false));
     try expectEntry(alloc, io, sb.dir_service, null);
 
-    try std.testing.expect(try capture(alloc, io, sb.base, "p", sb.live, true));
+    try std.testing.expect(try capture(alloc, io, sb.base, sb.name, sb.live, true));
     try expectEntry(alloc, io, sb.dir_service, fixture_new);
 
     try put(alloc, io, sb.live, fixture_old);
-    try std.testing.expect(try capture(alloc, io, sb.base, "p", sb.live, true));
+    try std.testing.expect(try capture(alloc, io, sb.base, sb.name, sb.live, true));
     try expectEntry(alloc, io, sb.dir_service, fixture_new);
 }
 
@@ -448,9 +453,9 @@ test "activate copies the profile login to the live entry" {
     const sb = try Sandbox.init(alloc, io, "act");
     defer sb.deinit(alloc, io);
 
-    try std.testing.expect(!try activate(alloc, io, sb.base, "p", sb.live));
+    try std.testing.expect(!try activate(alloc, io, sb.base, sb.name, sb.live));
     try put(alloc, io, sb.legacy_service, fixture_new);
-    try std.testing.expect(try activate(alloc, io, sb.base, "p", sb.live));
+    try std.testing.expect(try activate(alloc, io, sb.base, sb.name, sb.live));
     try expectEntry(alloc, io, sb.live, fixture_new);
     try expectEntry(alloc, io, sb.dir_service, fixture_new);
 }
@@ -464,9 +469,9 @@ test "readProfile returns the stored login or null" {
     const sb = try Sandbox.init(alloc, io, "rd");
     defer sb.deinit(alloc, io);
 
-    try std.testing.expectEqual(@as(?[]const u8, null), try readProfile(alloc, io, sb.base, "p"));
+    try std.testing.expectEqual(@as(?[]const u8, null), try readProfile(alloc, io, sb.base, sb.name));
     try put(alloc, io, sb.dir_service, fixture_old);
-    const blob = (try readProfile(alloc, io, sb.base, "p")).?;
+    const blob = (try readProfile(alloc, io, sb.base, sb.name)).?;
     defer alloc.free(blob);
     try std.testing.expectEqualStrings(fixture_old, blob);
 }
@@ -500,9 +505,9 @@ test "copyProfile copies the per-dir login and reports a missing one" {
     defer alloc.free(to_service);
     defer keychain.delete(alloc, io, to_service) catch {};
 
-    try std.testing.expect(!try copyProfile(alloc, io, sb.base, "p", "q"));
+    try std.testing.expect(!try copyProfile(alloc, io, sb.base, sb.name, "q"));
     try put(alloc, io, sb.dir_service, fixture_new);
-    try std.testing.expect(try copyProfile(alloc, io, sb.base, "p", "q"));
+    try std.testing.expect(try copyProfile(alloc, io, sb.base, sb.name, "q"));
     try expectEntry(alloc, io, to_service, fixture_new);
     try expectEntry(alloc, io, sb.dir_service, fixture_new);
 }
@@ -516,23 +521,23 @@ test "hasLogin, hasLegacy and sameAsLive read without writing" {
     const sb = try Sandbox.init(alloc, io, "has");
     defer sb.deinit(alloc, io);
 
-    try std.testing.expect(!hasLogin(alloc, io, sb.base, "p"));
-    try std.testing.expect(!hasLegacy(alloc, io, "p"));
-    try std.testing.expectEqual(@as(?bool, null), sameAsLive(alloc, io, sb.base, "p", sb.live));
+    try std.testing.expect(!hasLogin(alloc, io, sb.base, sb.name));
+    try std.testing.expect(!hasLegacy(alloc, io, sb.name));
+    try std.testing.expectEqual(@as(?bool, null), sameAsLive(alloc, io, sb.base, sb.name, sb.live));
 
     try put(alloc, io, sb.legacy_service, fixture_old);
-    try std.testing.expect(hasLogin(alloc, io, sb.base, "p"));
-    try std.testing.expect(hasLegacy(alloc, io, "p"));
+    try std.testing.expect(hasLogin(alloc, io, sb.base, sb.name));
+    try std.testing.expect(hasLegacy(alloc, io, sb.name));
     try expectEntry(alloc, io, sb.dir_service, null);
     keychain.delete(alloc, io, sb.legacy_service) catch {};
 
     try put(alloc, io, sb.dir_service, fixture_old);
-    try std.testing.expect(hasLogin(alloc, io, sb.base, "p"));
-    try std.testing.expectEqual(@as(?bool, null), sameAsLive(alloc, io, sb.base, "p", sb.live));
+    try std.testing.expect(hasLogin(alloc, io, sb.base, sb.name));
+    try std.testing.expectEqual(@as(?bool, null), sameAsLive(alloc, io, sb.base, sb.name, sb.live));
     try put(alloc, io, sb.live, fixture_old);
-    try std.testing.expectEqual(@as(?bool, true), sameAsLive(alloc, io, sb.base, "p", sb.live));
+    try std.testing.expectEqual(@as(?bool, true), sameAsLive(alloc, io, sb.base, sb.name, sb.live));
     try put(alloc, io, sb.live, fixture_new);
-    try std.testing.expectEqual(@as(?bool, false), sameAsLive(alloc, io, sb.base, "p", sb.live));
+    try std.testing.expectEqual(@as(?bool, false), sameAsLive(alloc, io, sb.base, sb.name, sb.live));
 }
 
 test "hasLogin reads the credentials file without Keychain support" {
@@ -566,7 +571,7 @@ test "forget removes the per-dir and legacy entries" {
 
     try put(alloc, io, sb.dir_service, fixture_old);
     try put(alloc, io, sb.legacy_service, fixture_old);
-    try forget(alloc, io, sb.base, "p");
+    try forget(alloc, io, sb.base, sb.name);
     try expectEntry(alloc, io, sb.dir_service, null);
     try expectEntry(alloc, io, sb.legacy_service, null);
 }
@@ -579,17 +584,17 @@ test "ensure reuses a live token, keeps an existing entry and otherwise needs a 
     const io = tio.io();
     const sb = try Sandbox.init(alloc, io, "ens");
     defer sb.deinit(alloc, io);
-    const dir = try paths.profileDirIn(alloc, sb.base, "p");
+    const dir = try paths.profileDirIn(alloc, sb.base, sb.name);
     defer alloc.free(dir);
 
-    try std.testing.expectEqual(Status.needs_login, try ensure(alloc, io, dir, "p", sb.live, true));
+    try std.testing.expectEqual(Status.needs_login, try ensure(alloc, io, dir, sb.name, sb.live, true));
 
     const far_future = "{\"claudeAiOauth\":{\"expiresAt\":99999999999999}}";
     try put(alloc, io, sb.live, far_future);
-    try std.testing.expectEqual(Status.needs_login, try ensure(alloc, io, dir, "p", sb.live, false));
-    try std.testing.expectEqual(Status.migratable, try ensure(alloc, io, dir, "p", sb.live, true));
+    try std.testing.expectEqual(Status.needs_login, try ensure(alloc, io, dir, sb.name, sb.live, false));
+    try std.testing.expectEqual(Status.migratable, try ensure(alloc, io, dir, sb.name, sb.live, true));
     try expectEntry(alloc, io, sb.dir_service, far_future);
-    try std.testing.expectEqual(Status.ready, try ensure(alloc, io, dir, "p", sb.live, true));
+    try std.testing.expectEqual(Status.ready, try ensure(alloc, io, dir, sb.name, sb.live, true));
 }
 
 test "ensure converts a legacy entry before looking at the per-dir entry" {
@@ -600,11 +605,11 @@ test "ensure converts a legacy entry before looking at the per-dir entry" {
     const io = tio.io();
     const sb = try Sandbox.init(alloc, io, "ens-leg");
     defer sb.deinit(alloc, io);
-    const dir = try paths.profileDirIn(alloc, sb.base, "p");
+    const dir = try paths.profileDirIn(alloc, sb.base, sb.name);
     defer alloc.free(dir);
 
     try put(alloc, io, sb.legacy_service, fixture_new);
-    try std.testing.expectEqual(Status.ready, try ensure(alloc, io, dir, "p", sb.live, false));
+    try std.testing.expectEqual(Status.ready, try ensure(alloc, io, dir, sb.name, sb.live, false));
     try expectEntry(alloc, io, sb.dir_service, fixture_new);
     try expectEntry(alloc, io, sb.legacy_service, null);
 }
