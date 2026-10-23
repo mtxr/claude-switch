@@ -17,10 +17,24 @@ const MAX_FILE_BYTES = 256;
 
 pub const Shell = completion.Shell;
 
+pub const Syntax = enum { posix, fish };
+
+pub fn syntaxFor(shell: Shell) Syntax {
+    return if (shell == .fish) .fish else .posix;
+}
+
 const ZSH_HOOK =
     \\__csw_hook() { eval "$(command csw env --from-cwd)"; }
     \\autoload -Uz add-zsh-hook
     \\add-zsh-hook precmd __csw_hook
+    \\__csw_hook
+    \\
+;
+
+const FISH_HOOK =
+    \\function __csw_hook --on-event fish_prompt
+    \\    command csw env --from-cwd --shell fish | source
+    \\end
     \\__csw_hook
     \\
 ;
@@ -63,7 +77,7 @@ pub fn cmdUnbind(gpa: std.mem.Allocator) !void {
     display.ok("Removed directory binding");
 }
 
-pub fn cmdEnvFromCwd(gpa: std.mem.Allocator, io: std.Io) !void {
+pub fn cmdEnvFromCwd(gpa: std.mem.Allocator, io: std.Io, syntax: Syntax) !void {
     const h = paths.home(gpa) catch return;
     defer gpa.free(h);
     const cwd = currentDir(gpa) catch return;
@@ -90,16 +104,16 @@ pub fn cmdEnvFromCwd(gpa: std.mem.Allocator, io: std.Io) !void {
         display.warnErr(message);
     }
 
-    const script = try renderEnv(gpa, target, bound, current);
+    const script = try renderEnv(gpa, syntax, target, bound, current);
     defer gpa.free(script);
-    const warned_script = try renderWarned(gpa, action, key);
+    const warned_script = try renderWarned(gpa, syntax, action, key);
     defer gpa.free(warned_script);
     display.print("{s}{s}", .{ script, warned_script });
 }
 
 pub fn cmdHook(gpa: std.mem.Allocator, shell_name: []const u8) !void {
     const shell = parseShell(shell_name) orelse {
-        display.print("❌  Unsupported shell '{s}'. Use: csw hook zsh | bash\n", .{shell_name});
+        display.print("❌  Unsupported shell '{s}'. Use: csw hook zsh | bash | fish\n", .{shell_name});
         return error.UnsupportedShell;
     };
     const script = try renderHook(gpa, shell);
@@ -137,6 +151,40 @@ pub fn hookScript(shell: Shell) []const u8 {
     return switch (shell) {
         .zsh => ZSH_HOOK,
         .bash => BASH_HOOK,
+        .fish => FISH_HOOK,
+    };
+}
+
+pub fn fishQuote(gpa: std.mem.Allocator, value: []const u8) ![]u8 {
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(gpa);
+    try out.append(gpa, '\'');
+    for (value) |ch| {
+        if (ch == '\'' or ch == '\\') try out.append(gpa, '\\');
+        try out.append(gpa, ch);
+    }
+    try out.append(gpa, '\'');
+    return out.toOwnedSlice(gpa);
+}
+
+fn quoteFor(gpa: std.mem.Allocator, syntax: Syntax, value: []const u8) ![]u8 {
+    return switch (syntax) {
+        .posix => shellQuote(gpa, value),
+        .fish => fishQuote(gpa, value),
+    };
+}
+
+fn exportLine(gpa: std.mem.Allocator, syntax: Syntax, name: []const u8, quoted: []const u8) ![]u8 {
+    return switch (syntax) {
+        .posix => std.fmt.allocPrint(gpa, "export {s}={s}", .{ name, quoted }),
+        .fish => std.fmt.allocPrint(gpa, "set -gx {s} {s}", .{ name, quoted }),
+    };
+}
+
+fn unsetLine(gpa: std.mem.Allocator, syntax: Syntax, name: []const u8) ![]u8 {
+    return switch (syntax) {
+        .posix => std.fmt.allocPrint(gpa, "unset {s}", .{name}),
+        .fish => std.fmt.allocPrint(gpa, "set -e {s}", .{name}),
     };
 }
 
@@ -172,20 +220,28 @@ pub fn isNewExport(dir: []const u8, bound: ?[]const u8, current: ?[]const u8) bo
 /// Renders the eval-able script. `target` is the config dir the hook should use,
 /// `bound` the value the hook exported before and `current` the present CLAUDE_CONFIG_DIR.
 /// Never overwrites or removes a CLAUDE_CONFIG_DIR set by hand.
-pub fn renderEnv(gpa: std.mem.Allocator, target: ?[]const u8, bound: ?[]const u8, current: ?[]const u8) ![]u8 {
+pub fn renderEnv(gpa: std.mem.Allocator, syntax: Syntax, target: ?[]const u8, bound: ?[]const u8, current: ?[]const u8) ![]u8 {
     const set_by_hook = isHookOwned(bound, current);
     const user_owned = current != null and !set_by_hook;
 
     if (target) |dir| {
         if (user_owned) return gpa.dupe(u8, "");
-        const quoted = try shellQuote(gpa, dir);
+        const quoted = try quoteFor(gpa, syntax, dir);
         defer gpa.free(quoted);
-        return std.fmt.allocPrint(gpa, "export {s}={s}; export {s}={s}\n", .{ CONFIG_VAR, quoted, BOUND_VAR, quoted });
+        const config = try exportLine(gpa, syntax, CONFIG_VAR, quoted);
+        defer gpa.free(config);
+        const bound_line = try exportLine(gpa, syntax, BOUND_VAR, quoted);
+        defer gpa.free(bound_line);
+        return std.fmt.allocPrint(gpa, "{s}; {s}\n", .{ config, bound_line });
     }
 
     if (bound == null) return gpa.dupe(u8, "");
-    if (set_by_hook) return std.fmt.allocPrint(gpa, "unset {s}; unset {s}\n", .{ CONFIG_VAR, BOUND_VAR });
-    return std.fmt.allocPrint(gpa, "unset {s}\n", .{BOUND_VAR});
+    const unset_bound = try unsetLine(gpa, syntax, BOUND_VAR);
+    defer gpa.free(unset_bound);
+    if (!set_by_hook) return std.fmt.allocPrint(gpa, "{s}\n", .{unset_bound});
+    const unset_config = try unsetLine(gpa, syntax, CONFIG_VAR);
+    defer gpa.free(unset_config);
+    return std.fmt.allocPrint(gpa, "{s}; {s}\n", .{ unset_config, unset_bound });
 }
 
 pub fn bindIn(gpa: std.mem.Allocator, base: []const u8, dir: []const u8, name: []const u8) !void {
@@ -263,14 +319,20 @@ pub fn decideWarning(key: ?[]const u8, warned: ?[]const u8, bound: ?[]const u8, 
     return if (warned != null) .clear else .none;
 }
 
-pub fn renderWarned(gpa: std.mem.Allocator, action: WarnAction, key: ?[]const u8) ![]u8 {
+pub fn renderWarned(gpa: std.mem.Allocator, syntax: Syntax, action: WarnAction, key: ?[]const u8) ![]u8 {
     switch (action) {
         .none => return gpa.dupe(u8, ""),
-        .clear => return std.fmt.allocPrint(gpa, "unset {s}\n", .{WARNED_VAR}),
+        .clear => {
+            const line = try unsetLine(gpa, syntax, WARNED_VAR);
+            defer gpa.free(line);
+            return std.fmt.allocPrint(gpa, "{s}\n", .{line});
+        },
         .warn => {
-            const quoted = try shellQuote(gpa, key.?);
+            const quoted = try quoteFor(gpa, syntax, key.?);
             defer gpa.free(quoted);
-            return std.fmt.allocPrint(gpa, "export {s}={s}\n", .{ WARNED_VAR, quoted });
+            const line = try exportLine(gpa, syntax, WARNED_VAR, quoted);
+            defer gpa.free(line);
+            return std.fmt.allocPrint(gpa, "{s}\n", .{line});
         },
     }
 }
@@ -369,13 +431,13 @@ test "decideWarning stays silent for a CLAUDE_CONFIG_DIR set by hand" {
 
 test "renderWarned exports the key, unsets it or stays empty" {
     const alloc = std.testing.allocator;
-    const none = try renderWarned(alloc, .none, null);
+    const none = try renderWarned(alloc, .posix, .none, null);
     defer alloc.free(none);
     try std.testing.expectEqualStrings("", none);
-    const clear = try renderWarned(alloc, .clear, null);
+    const clear = try renderWarned(alloc, .posix, .clear, null);
     defer alloc.free(clear);
     try std.testing.expectEqualStrings("unset __CSW_WARNED\n", clear);
-    const warn = try renderWarned(alloc, .warn, "/p'q|x");
+    const warn = try renderWarned(alloc, .posix, .warn, "/p'q|x");
     defer alloc.free(warn);
     try std.testing.expectEqualStrings("export __CSW_WARNED='/p'\\''q|x'\n", warn);
 }
@@ -461,21 +523,81 @@ test "isNewExport fires only for the first export of a dir" {
 
 test "renderHook appends the completions to the hook" {
     const alloc = std.testing.allocator;
-    for ([_]Shell{ .zsh, .bash }) |shell| {
+    for ([_]Shell{ .zsh, .bash, .fish }) |shell| {
         const script = try renderHook(alloc, shell);
         defer alloc.free(script);
         try std.testing.expect(std.mem.startsWith(u8, script, hookScript(shell)));
-        try std.testing.expect(std.mem.indexOf(u8, script, "_csw()") != null);
+        const marker = if (shell == .fish) "function __csw_command_is" else "_csw()";
+        try std.testing.expect(std.mem.indexOf(u8, script, marker) != null);
     }
 }
 
 test "parseShell and hookScript" {
     try std.testing.expectEqual(Shell.zsh, parseShell("zsh").?);
     try std.testing.expectEqual(Shell.bash, parseShell("bash").?);
-    try std.testing.expect(parseShell("fish") == null);
+    try std.testing.expectEqual(Shell.fish, parseShell("fish").?);
+    try std.testing.expect(parseShell("nushell") == null);
     try std.testing.expect(std.mem.indexOf(u8, hookScript(.zsh), "add-zsh-hook precmd") != null);
     try std.testing.expect(std.mem.indexOf(u8, hookScript(.bash), "PROMPT_COMMAND") != null);
     try std.testing.expect(std.mem.indexOf(u8, hookScript(.zsh), "csw env --from-cwd") != null);
+    try std.testing.expect(std.mem.indexOf(u8, hookScript(.fish), "--on-event fish_prompt") != null);
+    try std.testing.expect(std.mem.indexOf(u8, hookScript(.fish), "csw env --from-cwd --shell fish | source") != null);
+}
+
+test "syntaxFor maps fish to fish syntax and the rest to posix" {
+    try std.testing.expectEqual(Syntax.fish, syntaxFor(.fish));
+    try std.testing.expectEqual(Syntax.posix, syntaxFor(.zsh));
+    try std.testing.expectEqual(Syntax.posix, syntaxFor(.bash));
+}
+
+test "fishQuote escapes quotes and backslashes" {
+    const alloc = std.testing.allocator;
+    const plain = try fishQuote(alloc, "/home/u/.claude.work");
+    defer alloc.free(plain);
+    try std.testing.expectEqualStrings("'/home/u/.claude.work'", plain);
+    const tricky = try fishQuote(alloc, "a'b\\c");
+    defer alloc.free(tricky);
+    try std.testing.expectEqualStrings("'a\\'b\\\\c'", tricky);
+}
+
+test "renderEnv in fish syntax sets, replaces and unsets like the posix one" {
+    const alloc = std.testing.allocator;
+    const set = try renderEnv(alloc, .fish, "/h/.claude.work", null, null);
+    defer alloc.free(set);
+    try std.testing.expectEqualStrings("set -gx CLAUDE_CONFIG_DIR '/h/.claude.work'; set -gx __CSW_BOUND '/h/.claude.work'\n", set);
+
+    const replace = try renderEnv(alloc, .fish, "/h/.claude.b", "/h/.claude.a", "/h/.claude.a");
+    defer alloc.free(replace);
+    try std.testing.expect(std.mem.startsWith(u8, replace, "set -gx CLAUDE_CONFIG_DIR '/h/.claude.b'"));
+
+    const manual = try renderEnv(alloc, .fish, "/h/.claude.work", null, "/manual");
+    defer alloc.free(manual);
+    try std.testing.expectEqualStrings("", manual);
+
+    const hook_set = try renderEnv(alloc, .fish, null, "/h/.claude.a", "/h/.claude.a");
+    defer alloc.free(hook_set);
+    try std.testing.expectEqualStrings("set -e CLAUDE_CONFIG_DIR; set -e __CSW_BOUND\n", hook_set);
+
+    const user_override = try renderEnv(alloc, .fish, null, "/h/.claude.a", "/manual");
+    defer alloc.free(user_override);
+    try std.testing.expectEqualStrings("set -e __CSW_BOUND\n", user_override);
+
+    const idle = try renderEnv(alloc, .fish, null, null, null);
+    defer alloc.free(idle);
+    try std.testing.expectEqualStrings("", idle);
+}
+
+test "renderWarned in fish syntax" {
+    const alloc = std.testing.allocator;
+    const none = try renderWarned(alloc, .fish, .none, null);
+    defer alloc.free(none);
+    try std.testing.expectEqualStrings("", none);
+    const clear = try renderWarned(alloc, .fish, .clear, null);
+    defer alloc.free(clear);
+    try std.testing.expectEqualStrings("set -e __CSW_WARNED\n", clear);
+    const warn = try renderWarned(alloc, .fish, .warn, "/p'q|x");
+    defer alloc.free(warn);
+    try std.testing.expectEqualStrings("set -gx __CSW_WARNED '/p\\'q|x'\n", warn);
 }
 
 test "shellQuote escapes single quotes" {
@@ -490,47 +612,47 @@ test "shellQuote escapes single quotes" {
 
 test "renderEnv exports when the user set nothing" {
     const alloc = std.testing.allocator;
-    const out = try renderEnv(alloc, "/h/.claude.work", null, null);
+    const out = try renderEnv(alloc, .posix, "/h/.claude.work", null, null);
     defer alloc.free(out);
     try std.testing.expectEqualStrings("export CLAUDE_CONFIG_DIR='/h/.claude.work'; export __CSW_BOUND='/h/.claude.work'\n", out);
 }
 
 test "renderEnv replaces a value set by the hook itself" {
     const alloc = std.testing.allocator;
-    const out = try renderEnv(alloc, "/h/.claude.b", "/h/.claude.a", "/h/.claude.a");
+    const out = try renderEnv(alloc, .posix, "/h/.claude.b", "/h/.claude.a", "/h/.claude.a");
     defer alloc.free(out);
     try std.testing.expect(std.mem.startsWith(u8, out, "export CLAUDE_CONFIG_DIR='/h/.claude.b'"));
 }
 
 test "renderEnv does not overwrite a manual CLAUDE_CONFIG_DIR" {
     const alloc = std.testing.allocator;
-    const without_bound = try renderEnv(alloc, "/h/.claude.work", null, "/manual");
+    const without_bound = try renderEnv(alloc, .posix, "/h/.claude.work", null, "/manual");
     defer alloc.free(without_bound);
     try std.testing.expectEqualStrings("", without_bound);
-    const stale_bound = try renderEnv(alloc, "/h/.claude.work", "/h/.claude.a", "/manual");
+    const stale_bound = try renderEnv(alloc, .posix, "/h/.claude.work", "/h/.claude.a", "/manual");
     defer alloc.free(stale_bound);
     try std.testing.expectEqualStrings("", stale_bound);
 }
 
 test "renderEnv removes only what the hook set" {
     const alloc = std.testing.allocator;
-    const hook_set = try renderEnv(alloc, null, "/h/.claude.a", "/h/.claude.a");
+    const hook_set = try renderEnv(alloc, .posix, null, "/h/.claude.a", "/h/.claude.a");
     defer alloc.free(hook_set);
     try std.testing.expectEqualStrings("unset CLAUDE_CONFIG_DIR; unset __CSW_BOUND\n", hook_set);
-    const user_override = try renderEnv(alloc, null, "/h/.claude.a", "/manual");
+    const user_override = try renderEnv(alloc, .posix, null, "/h/.claude.a", "/manual");
     defer alloc.free(user_override);
     try std.testing.expectEqualStrings("unset __CSW_BOUND\n", user_override);
-    const bound_only = try renderEnv(alloc, null, "/h/.claude.a", null);
+    const bound_only = try renderEnv(alloc, .posix, null, "/h/.claude.a", null);
     defer alloc.free(bound_only);
     try std.testing.expectEqualStrings("unset __CSW_BOUND\n", bound_only);
 }
 
 test "renderEnv with nothing to do" {
     const alloc = std.testing.allocator;
-    const idle = try renderEnv(alloc, null, null, null);
+    const idle = try renderEnv(alloc, .posix, null, null, null);
     defer alloc.free(idle);
     try std.testing.expectEqualStrings("", idle);
-    const manual_only = try renderEnv(alloc, null, null, "/manual");
+    const manual_only = try renderEnv(alloc, .posix, null, null, "/manual");
     defer alloc.free(manual_only);
     try std.testing.expectEqualStrings("", manual_only);
 }

@@ -1,10 +1,10 @@
-//! completion.zig — zsh and bash completion scripts generated from the command table
+//! completion.zig — zsh, bash and fish completion scripts generated from the command table
 
 const std = @import("std");
 const commands = @import("commands.zig");
 const display = @import("display.zig");
 
-pub const Shell = enum { zsh, bash };
+pub const Shell = enum { zsh, bash, fish };
 
 pub fn parseShell(name: []const u8) ?Shell {
     return std.meta.stringToEnum(Shell, name);
@@ -16,7 +16,7 @@ pub fn shellNames() []const []const u8 {
 
 pub fn cmdCompletion(gpa: std.mem.Allocator, shell_name: []const u8) !void {
     const shell = parseShell(shell_name) orelse {
-        display.print("❌  Unsupported shell '{s}'. Use: csw completion zsh | bash\n", .{shell_name});
+        display.print("❌  Unsupported shell '{s}'. Use: csw completion zsh | bash | fish\n", .{shell_name});
         return error.UnsupportedShell;
     };
     const script = try render(gpa, shell);
@@ -30,6 +30,7 @@ pub fn render(gpa: std.mem.Allocator, shell: Shell) ![]u8 {
     switch (shell) {
         .zsh => try renderZsh(gpa, &out),
         .bash => try renderBash(gpa, &out),
+        .fish => try renderFish(gpa, &out),
     }
     return out.toOwnedSlice(gpa);
 }
@@ -212,6 +213,74 @@ fn renderBash(gpa: std.mem.Allocator, out: *std.ArrayList(u8)) !void {
     try out.appendSlice(gpa, BASH_TAIL);
 }
 
+fn putFishQuoted(gpa: std.mem.Allocator, out: *std.ArrayList(u8), text: []const u8) !void {
+    try out.append(gpa, '\'');
+    for (text) |ch| {
+        if (ch == '\'' or ch == '\\') try out.append(gpa, '\\');
+        try out.append(gpa, ch);
+    }
+    try out.append(gpa, '\'');
+}
+
+const FISH_HEAD =
+    \\function __csw_command_is
+    \\    set -l tokens (commandline -opc)
+    \\    test (count $tokens) -ge 2; and contains -- $tokens[2] $argv
+    \\end
+    \\function __csw_at_first_arg
+    \\    set -l tokens (commandline -opc)
+    \\    test (count $tokens) -ge 2; or return 1
+    \\    set -e tokens[1..2]
+    \\    for token in $tokens
+    \\        test "$token" = --; and return 1
+    \\        string match -q -- '-*' $token; or return 1
+    \\    end
+    \\    return 0
+    \\end
+    \\complete -c csw -f
+    \\
+;
+
+fn putFishCommandList(gpa: std.mem.Allocator, out: *std.ArrayList(u8), arg: commands.ArgKind) !void {
+    var first = true;
+    for (commands.all) |command| {
+        if (command.arg != arg) continue;
+        if (!first) try out.append(gpa, ' ');
+        try out.appendSlice(gpa, command.name);
+        first = false;
+    }
+}
+
+fn renderFish(gpa: std.mem.Allocator, out: *std.ArrayList(u8)) !void {
+    try out.appendSlice(gpa, FISH_HEAD);
+    for (commands.all) |command| {
+        if (command.hidden) continue;
+        try put(gpa, out, "complete -c csw -n __fish_use_subcommand -a {s} -d ", .{command.name});
+        try putFishQuoted(gpa, out, command.summary);
+        try out.append(gpa, '\n');
+    }
+    for (commands.all) |command| {
+        for (command.flags) |flag| {
+            try put(gpa, out, "complete -c csw -n '__csw_command_is {s}' -l {s}\n", .{ command.name, flag[2..] });
+        }
+    }
+    for ([_]commands.ArgKind{ .profile, .shell }) |kind| {
+        try out.appendSlice(gpa, "complete -c csw -n '__csw_command_is ");
+        try putFishCommandList(gpa, out, kind);
+        try out.appendSlice(gpa, "; and __csw_at_first_arg' -a ");
+        switch (kind) {
+            .profile => try out.appendSlice(gpa, "'(command csw _profiles 2>/dev/null)'"),
+            .shell => {
+                try out.append(gpa, '\'');
+                try putShellWords(gpa, out);
+                try out.append(gpa, '\'');
+            },
+            .none => unreachable,
+        }
+        try out.append(gpa, '\n');
+    }
+}
+
 fn expectContains(haystack: []const u8, needle: []const u8) !void {
     if (std.mem.indexOf(u8, haystack, needle) == null) {
         std.debug.print("missing: {s}\n", .{needle});
@@ -222,8 +291,9 @@ fn expectContains(haystack: []const u8, needle: []const u8) !void {
 test "parseShell and shellNames" {
     try std.testing.expectEqual(Shell.zsh, parseShell("zsh").?);
     try std.testing.expectEqual(Shell.bash, parseShell("bash").?);
-    try std.testing.expect(parseShell("fish") == null);
-    try std.testing.expectEqual(@as(usize, 2), shellNames().len);
+    try std.testing.expectEqual(Shell.fish, parseShell("fish").?);
+    try std.testing.expect(parseShell("nushell") == null);
+    try std.testing.expectEqual(@as(usize, 3), shellNames().len);
 }
 
 test "putSingleQuoted escapes single quotes" {
@@ -258,8 +328,8 @@ test "zsh script offers flags, profiles and shells where they apply" {
     try expectContains(script, "command csw _profiles 2>/dev/null");
     try expectContains(script, "    env)\n      if [[ $cur == -* ]]; then\n        compadd -- --from-cwd\n");
     try expectContains(script, "    update)\n      if [[ $cur == -* ]]; then\n        compadd -- --verbose\n      fi\n");
-    try expectContains(script, "    hook)\n      if (( n == 0 )); then\n        compadd zsh bash\n");
-    try expectContains(script, "    completion)\n      if (( n == 0 )); then\n        compadd zsh bash\n");
+    try expectContains(script, "    hook)\n      if (( n == 0 )); then\n        compadd zsh bash fish\n");
+    try expectContains(script, "    completion)\n      if (( n == 0 )); then\n        compadd zsh bash fish\n");
     try expectContains(script, "    run)\n      if (( n == 0 )); then\n");
     try std.testing.expect(std.mem.indexOf(u8, script, "    whoami)") == null);
     try std.testing.expect(std.mem.indexOf(u8, script, "    new)\n      if [[ $cur == -* ]]; then\n        compadd -- --desktop --all\n      fi\n") != null);
@@ -279,7 +349,7 @@ test "bash script lists the visible commands and registers itself" {
     const script = try render(alloc, .bash);
     defer alloc.free(script);
     try expectContains(script, "complete -F _csw csw");
-    try expectContains(script, "compgen -W \"save use rename new delete list whoami pick update logout-all run login env bind unbind hook completion doctor\"");
+    try expectContains(script, "compgen -W \"save use rename new delete list whoami pick update logout-all run login env bind unbind hook completion man doctor\"");
 }
 
 test "bash script offers flags, profiles and shells where they apply" {
@@ -289,9 +359,71 @@ test "bash script offers flags, profiles and shells where they apply" {
     try expectContains(script, "    use)\n      if [[ $cur == -* ]]; then\n        COMPREPLY=($(compgen -W \"--desktop --all\" -- \"$cur\"))\n      elif (( n == 0 )); then\n");
     try expectContains(script, "$(command csw _profiles 2>/dev/null)");
     try expectContains(script, "    env)\n      if [[ $cur == -* ]]; then\n        COMPREPLY=($(compgen -W \"--from-cwd\"");
-    try expectContains(script, "    hook)\n      if (( n == 0 )); then\n        COMPREPLY=($(compgen -W \"zsh bash\"");
+    try expectContains(script, "    hook)\n      if (( n == 0 )); then\n        COMPREPLY=($(compgen -W \"zsh bash fish\"");
     try expectContains(script, "    update)\n      if [[ $cur == -* ]]; then\n        COMPREPLY=($(compgen -W \"--verbose\"");
     try std.testing.expect(std.mem.indexOf(u8, script, "    whoami)") == null);
+}
+
+test "putFishQuoted escapes quotes and backslashes" {
+    const alloc = std.testing.allocator;
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(alloc);
+    try putFishQuoted(alloc, &out, "it's a\\b");
+    try std.testing.expectEqualStrings("'it\\'s a\\\\b'", out.items);
+}
+
+test "fish script lists every visible command with its description" {
+    const alloc = std.testing.allocator;
+    const script = try render(alloc, .fish);
+    defer alloc.free(script);
+    try expectContains(script, "complete -c csw -f\n");
+    for (commands.all) |command| {
+        const entry = try std.fmt.allocPrint(alloc, "complete -c csw -n __fish_use_subcommand -a {s} -d ", .{command.name});
+        defer alloc.free(entry);
+        if (command.hidden) {
+            try std.testing.expect(std.mem.indexOf(u8, script, entry) == null);
+        } else {
+            try expectContains(script, entry);
+        }
+    }
+    try expectContains(script, "-a use -d 'Switch Claude Code to a saved profile'\n");
+    try expectContains(script, "Print `export CLAUDE_CONFIG_DIR=...` for a profile'\n");
+}
+
+test "fish script offers flags per command, profiles and shells" {
+    const alloc = std.testing.allocator;
+    const script = try render(alloc, .fish);
+    defer alloc.free(script);
+    try expectContains(script, "complete -c csw -n '__csw_command_is use' -l desktop\n");
+    try expectContains(script, "complete -c csw -n '__csw_command_is use' -l all\n");
+    try expectContains(script, "complete -c csw -n '__csw_command_is env' -l from-cwd\n");
+    try expectContains(script, "complete -c csw -n '__csw_command_is update' -l verbose\n");
+    try expectContains(script, "-a '(command csw _profiles 2>/dev/null)'\n");
+    try expectContains(script, "complete -c csw -n '__csw_command_is hook completion; and __csw_at_first_arg' -a 'zsh bash fish'\n");
+    try std.testing.expect(std.mem.indexOf(u8, script, "__csw_command_is whoami") == null);
+}
+
+test "fish script offers profiles exactly to the commands that take one" {
+    const alloc = std.testing.allocator;
+    const script = try render(alloc, .fish);
+    defer alloc.free(script);
+    const marker = "-a '(command csw _profiles 2>/dev/null)'";
+    const marker_at = std.mem.indexOf(u8, script, marker).?;
+    const line_start = std.mem.lastIndexOfScalar(u8, script[0..marker_at], '\n').? + 1;
+    const prefix = "complete -c csw -n '__csw_command_is ";
+    try std.testing.expect(std.mem.startsWith(u8, script[line_start..], prefix));
+    const list_end = std.mem.indexOfPos(u8, script, line_start, ";").?;
+    var listed = std.mem.splitScalar(u8, script[line_start + prefix.len .. list_end], ' ');
+    var count: usize = 0;
+    while (listed.next()) |name| {
+        try std.testing.expectEqual(commands.ArgKind.profile, commands.find(name).?.arg);
+        count += 1;
+    }
+    var expected: usize = 0;
+    for (commands.all) |command| {
+        if (command.arg == .profile) expected += 1;
+    }
+    try std.testing.expectEqual(expected, count);
 }
 
 test "every command that takes a profile calls csw _profiles in both scripts" {

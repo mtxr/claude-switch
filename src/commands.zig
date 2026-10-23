@@ -34,8 +34,9 @@ pub const all = [_]Command{
     .{ .name = "env", .usage = "env [name]", .summary = "Print `export CLAUDE_CONFIG_DIR=...` for a profile", .arg = .profile, .picks_name = true, .flags = &.{"--from-cwd"}, .skips_update_check = true },
     .{ .name = "bind", .usage = "bind [name]", .summary = "Bind the current directory to a profile (.csw)", .arg = .profile, .picks_name = true },
     .{ .name = "unbind", .usage = "unbind", .summary = "Remove the .csw binding from the current directory" },
-    .{ .name = "hook", .usage = "hook <shell>", .summary = "Print the shell hook with completions (zsh|bash): eval \"$(csw hook zsh)\"", .arg = .shell, .skips_update_check = true },
-    .{ .name = "completion", .usage = "completion <shell>", .summary = "Print only the shell completions (zsh|bash)", .arg = .shell, .skips_update_check = true },
+    .{ .name = "hook", .usage = "hook <shell>", .summary = "Print the shell hook with completions (zsh|bash|fish): eval \"$(csw hook zsh)\"", .arg = .shell, .skips_update_check = true },
+    .{ .name = "completion", .usage = "completion <shell>", .summary = "Print only the shell completions (zsh|bash|fish)", .arg = .shell, .skips_update_check = true },
+    .{ .name = "man", .usage = "man", .summary = "Print the man page (roff) to stdout", .skips_update_check = true },
     .{ .name = "doctor", .usage = "doctor", .summary = "Check that everything csw needs is in order" },
     .{ .name = "_profiles", .usage = "_profiles", .summary = "Print saved profile names, one per line", .hidden = true, .skips_update_check = true },
 };

@@ -113,8 +113,9 @@ csw login [name]     Start claude for a profile and log in once
 csw env [name]       Print `export CLAUDE_CONFIG_DIR=...` for a profile
 csw bind [name]      Bind the current directory to a profile (.csw)
 csw unbind           Remove the .csw binding from the current directory
-csw hook <shell>     Print the shell hook with completions (zsh|bash)
-csw completion <shell>  Print only the shell completions (zsh|bash)
+csw hook <shell>     Print the shell hook with completions (zsh|bash|fish)
+csw completion <shell>  Print only the shell completions (zsh|bash|fish)
+csw man            Print the man page (roff) to stdout
 csw doctor           Check that everything csw needs is in order
 ```
 
@@ -177,7 +178,7 @@ Bind a directory to a profile and let the shell switch for you:
 
 ```sh
 cd ~/work/project && csw bind work      # writes .csw containing "work"
-eval "$(csw hook zsh)"                  # add to ~/.zshrc (bash: ~/.bashrc)
+eval "$(csw hook zsh)"                  # add to ~/.zshrc (bash: ~/.bashrc; fish: csw hook fish | source in config.fish)
 ```
 
 On every prompt the hook finds the nearest `.csw` walking up from the current directory and exports `CLAUDE_CONFIG_DIR=~/.claude.<name>`. With no `.csw`, it exports the active profile (the one set by `csw use`). Leaving a bound tree goes back to the active profile, or unsets what the hook set when there is none. A `CLAUDE_CONFIG_DIR` you exported yourself is never overwritten or removed.
@@ -189,7 +190,11 @@ On every prompt the hook finds the nearest `.csw` walking up from the current di
 
 ### Shell completions
 
-`eval "$(csw hook zsh)"` (or `bash`) also registers completions, so no extra file or `fpath` change is needed. If you only want completions, use `csw completion zsh` or `csw completion bash`; for zsh you can also save the output as `_csw` in a directory on your `fpath`. Completions cover commands, the flags valid for each command, saved profile names and shell names, and are generated from the same command table as `--help`.
+`eval "$(csw hook zsh)"` (or `bash`; in fish, `csw hook fish | source`) also registers completions, so no extra file or `fpath` change is needed. If you only want completions, use `csw completion zsh`, `csw completion bash` or `csw completion fish`; for fish you can also save the output to `~/.config/fish/completions/csw.fish`, and for zsh you can also save the output as `_csw` in a directory on your `fpath`. Completions cover commands, the flags valid for each command, saved profile names and shell names, and are generated from the same command table as `--help`.
+
+### Man page
+
+`csw man` prints a man page generated from the same command table. View it with `csw man | man -l -` (Linux) or `csw man | mandoc | less` (macOS), or save it with `csw man > csw.1`.
 
 ## Doctor
 
@@ -234,7 +239,7 @@ Claude Desktop's session is an Electron cookie, encrypted by Desktop itself. csw
 
 ### Network
 
-csw does not send credentials anywhere. It makes network requests only to GitHub: `csw update` and `install.sh` download releases, and most commands start a background check for a newer release at most once every 24 hours (it queries the GitHub releases API with `curl` and caches the result in `/tmp/csw-update-cache`). The check is skipped by `update`, `env`, `hook`, `completion` and the internal `_profiles` command.
+csw does not send credentials anywhere. It makes network requests only to GitHub: `csw update` and `install.sh` download releases, and most commands start a background check for a newer release at most once every 24 hours (it queries the GitHub releases API with `curl` and caches the result in `/tmp/csw-update-cache`). The check is skipped by `update`, `env`, `hook`, `completion`, `man` and the internal `_profiles` command.
 
 ### Profile switching
 
@@ -244,7 +249,7 @@ Claude Desktop uses real directory renames instead (Electron does not follow sym
 
 ## Linux
 
-`csw` builds and runs on Linux (x86_64 and aarch64; `install.sh` and `csw update` pick the `unknown-linux-musl` asset). Supported: `save`, `use`, `rename`, `new`, `delete`, `list`, `pick`, `whoami` (Claude Code), `logout-all`, `run`, `login`, `env`, `bind`, `unbind`, `hook`, `completion`, `doctor`.
+`csw` builds and runs on Linux (x86_64 and aarch64; `install.sh` and `csw update` pick the `unknown-linux-musl` asset). Supported: `save`, `use`, `rename`, `new`, `delete`, `list`, `pick`, `whoami` (Claude Code), `logout-all`, `run`, `login`, `env`, `bind`, `unbind`, `hook`, `completion`, `man`, `doctor`.
 
 On Linux, Claude Code keeps its credentials in `<config dir>/.credentials.json` (mode 0600). Because `~/.claude/` is a symlink to the active profile directory, credentials switch together with the profile, and with `CLAUDE_CONFIG_DIR` each profile directory carries its own. csw does not copy them into another store. Claude Desktop and Keychain features are macOS-only and report "not supported" on Linux.
 
