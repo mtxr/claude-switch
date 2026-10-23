@@ -33,6 +33,8 @@ completions="$work/completions"
 mkdir -p "$completions"
 "$bindir/csw-x86_64-unknown-linux-musl" completion bash > "$completions/csw.bash"
 "$bindir/csw-x86_64-unknown-linux-musl" completion zsh > "$completions/_csw"
+"$bindir/csw-x86_64-unknown-linux-musl" completion fish > "$completions/csw.fish"
+"$bindir/csw-x86_64-unknown-linux-musl" man | gzip -9n > "$completions/csw.1.gz"
 
 cd "$repo"
 for pair in amd64:x86_64-unknown-linux-musl arm64:aarch64-unknown-linux-musl; do

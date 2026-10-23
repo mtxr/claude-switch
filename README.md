@@ -35,7 +35,7 @@ These channels become available once the first release that ships them is publis
 
 | Channel | Command |
 |---|---|
-| Homebrew (macOS and Linux) | `brew install mtxr/tap/csw` |
+| Homebrew (macOS and Linux) | `brew install mtxr/tap/csw` (`mtxr/tap/claude-switch` is an alias) |
 | mise (macOS and Linux) | `mise use -g github:mtxr/claude-switch` |
 | Nix (macOS and Linux) | `nix run github:mtxr/claude-switch` or `nix profile install github:mtxr/claude-switch` |
 | Debian, Ubuntu | `sudo apt install ./csw_<version>_<amd64\|arm64>.deb` from [Releases](https://github.com/mtxr/claude-switch/releases) |
