@@ -13,16 +13,23 @@ fn writeStderr(bytes: []const u8) void {
     _ = std.c.write(std.posix.STDERR_FILENO, bytes.ptr, bytes.len);
 }
 
-fn printOut(comptime fmt: []const u8, args: anytype) void {
+fn emit(sink: *const fn ([]const u8) void, comptime fmt: []const u8, args: anytype) void {
     var buf: [4096]u8 = undefined;
-    const s = std.fmt.bufPrint(&buf, fmt, args) catch return;
-    writeStdout(s);
+    if (std.fmt.bufPrint(&buf, fmt, args)) |text| {
+        sink(text);
+        return;
+    } else |_| {}
+    const text = std.fmt.allocPrint(std.heap.page_allocator, fmt, args) catch return;
+    defer std.heap.page_allocator.free(text);
+    sink(text);
+}
+
+fn printOut(comptime fmt: []const u8, args: anytype) void {
+    emit(writeStdout, fmt, args);
 }
 
 fn printErr(comptime fmt: []const u8, args: anytype) void {
-    var buf: [4096]u8 = undefined;
-    const s = std.fmt.bufPrint(&buf, fmt, args) catch return;
-    writeStderr(s);
+    emit(writeStderr, fmt, args);
 }
 
 pub fn info(msg: []const u8) void {
@@ -168,4 +175,24 @@ test "fmtScopes ignores non-strings" {
     const result = try fmtScopes(alloc, &scopes);
     defer alloc.free(result);
     try std.testing.expectEqualStrings("inference", result);
+}
+
+var captured: std.ArrayList(u8) = .empty;
+
+fn capture(bytes: []const u8) void {
+    captured.appendSlice(std.heap.page_allocator, bytes) catch unreachable;
+}
+
+test "emit passes short output through unchanged" {
+    captured.clearRetainingCapacity();
+    emit(capture, "{s}!", .{"hello"});
+    try std.testing.expectEqualStrings("hello!", captured.items);
+}
+
+test "emit keeps output larger than the stack buffer" {
+    captured.clearRetainingCapacity();
+    const big: [6000]u8 = @splat('x');
+    emit(capture, "{s}\n", .{&big});
+    try std.testing.expectEqual(@as(usize, 6001), captured.items.len);
+    try std.testing.expectEqual(@as(u8, '\n'), captured.items[6000]);
 }
