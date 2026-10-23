@@ -60,7 +60,7 @@ Profiles saved by the previous Python-based `csw` keep working. Its `csw-code-<p
 2. Install the new binary (see above).
 3. Check that your profiles are still there: `csw whoami` and `csw list`.
 
-`csw update` downloads the latest release binary from GitHub Releases instead of running `git pull`.
+`csw update` downloads the latest release binary from GitHub Releases, verifies it against the release `SHA256SUMS` and replaces the installed binary atomically, instead of running `git pull`.
 
 ## Getting started
 
@@ -159,7 +159,7 @@ csw records which profile owns the main Desktop data dir (`~/Library/Application
 - **`whoami`** — Shows the active Claude Code session, the Desktop owner and session, and saved profiles with email, plan and token expiry.
 - **`pick`** — `use` through the picker.
 - **`logout-all`** — Removes the live Claude Code login and the `~/.claude.json` / `~/.claude/` symlinks. Profile files and their stored logins are kept.
-- **`update [--verbose]`** — Downloads the latest release binary from GitHub and replaces the current one.
+- **`update [--verbose]`** — Downloads the latest release binary from GitHub, checks it against the release `SHA256SUMS` and replaces the current one atomically. It refuses, leaving the installed binary untouched, when the checksums are missing, do not list the asset or do not match. When csw was installed by Homebrew, Nix or a system package it does not replace itself and prints the package manager command instead.
 - **`doctor`** — See [Doctor](#doctor).
 
 ## Concurrent profiles

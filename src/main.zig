@@ -16,6 +16,7 @@ const profile = @import("profile.zig");
 const rename = @import("rename.zig");
 const run_cmd = @import("run.zig");
 const session = @import("session.zig");
+const update = @import("update.zig");
 const version = @import("version.zig");
 
 comptime {
@@ -35,6 +36,7 @@ comptime {
     _ = @import("rename.zig");
     _ = @import("run.zig");
     _ = @import("session.zig");
+    _ = @import("update.zig");
     _ = @import("version.zig");
 }
 
@@ -86,18 +88,20 @@ fn checkUpdateSilent(gpa: std.mem.Allocator, io: std.Io) void {
     const cache = readUpdateCache(gpa, cache_path_z);
     defer if (cache.version) |v| gpa.free(v);
 
+    var exe_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const exe_path = platform.executablePath(&exe_buf) orelse return;
+    var real_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const kind = update.detectInstall(update.resolveExecutable(&real_buf, exe_path));
+
     if (cache.version) |latest| {
         if (version.isNewerVersion(latest, VERSION)) {
-            const msg = std.fmt.allocPrint(gpa, "Update available: v{s} → v{s}  (run: csw update)", .{ VERSION, latest }) catch return;
+            const msg = update.updateNotice(gpa, VERSION, latest, kind) catch return;
             defer gpa.free(msg);
             display.info(msg);
         }
     }
 
     if (now - cache.checked < UPDATE_CHECK_INTERVAL_S) return;
-
-    var exe_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const exe_path = platform.executablePath(&exe_buf) orelse return;
 
     _ = std.process.spawn(io, .{
         .argv = &.{ exe_path, "--check-update-bg" },
@@ -684,6 +688,21 @@ fn printCodeSession(gpa: std.mem.Allocator, oauth: std.json.Value) !void {
 }
 
 fn cmdUpdate(gpa: std.mem.Allocator, io: std.Io, verbose: bool) !void {
+    var exe_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const exe_path = platform.executablePath(&exe_buf) orelse {
+        display.err("could not determine executable path");
+        return error.ExePathFailed;
+    };
+    var real_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const real_path = update.resolveExecutable(&real_buf, exe_path);
+    const kind = update.detectInstall(real_path);
+    if (kind != .standalone) {
+        const managed = try update.managedMessage(gpa, kind);
+        defer gpa.free(managed);
+        display.info(managed);
+        return;
+    }
+
     display.info("Checking for updates...");
 
     const url = try std.fmt.allocPrint(
@@ -746,58 +765,36 @@ fn cmdUpdate(gpa: std.mem.Allocator, io: std.Io, verbose: bool) !void {
         platform.notSupported("csw update");
         return error.UnsupportedPlatform;
     };
-    const dl_url = try std.fmt.allocPrint(
+    const base_url = try std.fmt.allocPrint(
         gpa,
-        "https://github.com/{s}/releases/download/v{s}/{s}",
-        .{ GITHUB_REPO, latest, asset },
+        "https://github.com/{s}/releases/download/v{s}",
+        .{ GITHUB_REPO, latest },
     );
-    defer gpa.free(dl_url);
+    defer gpa.free(base_url);
 
-    var exe_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const exe_path = platform.executablePath(&exe_buf) orelse {
-        display.err("could not determine executable path");
-        return error.ExePathFailed;
-    };
-
-    const dl_msg = try std.fmt.allocPrint(gpa, "Downloading to {s}...", .{exe_path});
+    const dl_msg = try std.fmt.allocPrint(gpa, "Downloading to {s}...", .{real_path});
     defer gpa.free(dl_msg);
     display.info(dl_msg);
 
     if (verbose) {
-        const url_msg = try std.fmt.allocPrint(gpa, "URL: {s}", .{dl_url});
+        const url_msg = try std.fmt.allocPrint(gpa, "URL: {s}/{s}", .{ base_url, asset });
         defer gpa.free(url_msg);
         display.info(url_msg);
     }
 
-    const tmp_path = try std.fmt.allocPrint(gpa, "{s}_update_tmp", .{exe_path});
-    defer gpa.free(tmp_path);
-
-    const dl_result = try std.process.run(gpa, io, .{
-        .argv = &.{ "curl", "-L", "--fail", "-o", tmp_path, dl_url },
-        .stdout_limit = .limited(1024),
-        .stderr_limit = .limited(4096),
-    });
-    defer gpa.free(dl_result.stdout);
-    defer gpa.free(dl_result.stderr);
-
-    const dl_ok = switch (dl_result.term) {
-        .exited => |code| code == 0,
-        else => false,
+    update.applyUpdate(gpa, io, .{ .download = update.curlDownload }, real_path, base_url, asset) catch |e| {
+        switch (e) {
+            error.DownloadFailed => display.print(
+                "❌  download failed — check your connection or visit https://github.com/{s}/releases\n",
+                .{GITHUB_REPO},
+            ),
+            error.ChecksumsUnavailable => display.err("could not download SHA256SUMS for this release; the installed binary was left untouched"),
+            error.ChecksumMissing => display.err("this asset is not listed in SHA256SUMS; the installed binary was left untouched"),
+            error.ChecksumMismatch => display.err("checksum mismatch for the downloaded binary; the installed binary was left untouched"),
+            else => display.err("could not replace the installed binary; it was left untouched"),
+        }
+        return e;
     };
-    if (!dl_ok) {
-        display.print(
-            "❌  download failed — check your connection or visit https://github.com/{s}/releases\n",
-            .{GITHUB_REPO},
-        );
-        return error.DownloadFailed;
-    }
-
-    const tmp_path_z = try gpa.dupeSentinel(u8, tmp_path, 0);
-    defer gpa.free(tmp_path_z);
-    const exe_path_z = try gpa.dupeSentinel(u8, exe_path, 0);
-    defer gpa.free(exe_path_z);
-    _ = std.c.chmod(tmp_path_z, 0o755);
-    if (std.c.rename(tmp_path_z, exe_path_z) != 0) return error.RenameFailed;
 
     const done_msg = try std.fmt.allocPrint(gpa, "Updated to v{s}", .{latest});
     defer gpa.free(done_msg);
