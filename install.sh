@@ -40,13 +40,44 @@ if [ -z "$LATEST" ]; then
   exit 1
 fi
 
-URL="https://github.com/${REPO}/releases/download/v${LATEST}/${BINARY}-${ARCH}-${TARGET_SUFFIX}"
+ASSET="${BINARY}-${ARCH}-${TARGET_SUFFIX}"
+BASE_URL="https://github.com/${REPO}/releases/download/v${LATEST}"
 
 mkdir -p "$BIN_DIR"
 
+WORK_DIR=$(mktemp -d)
+trap 'rm -rf "$WORK_DIR"' EXIT
+
 echo "➜   Downloading csw v${LATEST} for ${ARCH}..."
-curl -L --fail -o "${BIN_DIR}/${BINARY}" "$URL"
-chmod +x "${BIN_DIR}/${BINARY}"
+curl -L --fail -o "${WORK_DIR}/${ASSET}" "${BASE_URL}/${ASSET}"
+
+echo "➜   Verifying checksum..."
+if ! curl -L --fail -s -o "${WORK_DIR}/SHA256SUMS" "${BASE_URL}/SHA256SUMS"; then
+  echo "❌  Could not download SHA256SUMS for v${LATEST}. Refusing to install an unverified binary."
+  exit 1
+fi
+
+EXPECTED=$(awk -v asset="$ASSET" '$2 == asset { print $1 }' "${WORK_DIR}/SHA256SUMS")
+if [ -z "$EXPECTED" ]; then
+  echo "❌  ${ASSET} is not listed in SHA256SUMS. Refusing to install an unverified binary."
+  exit 1
+fi
+
+if command -v sha256sum >/dev/null 2>&1; then
+  ACTUAL=$(sha256sum "${WORK_DIR}/${ASSET}" | awk '{ print $1 }')
+else
+  ACTUAL=$(shasum -a 256 "${WORK_DIR}/${ASSET}" | awk '{ print $1 }')
+fi
+
+if [ "$ACTUAL" != "$EXPECTED" ]; then
+  echo "❌  Checksum mismatch for ${ASSET}."
+  echo "    expected: ${EXPECTED}"
+  echo "    actual:   ${ACTUAL}"
+  exit 1
+fi
+
+chmod +x "${WORK_DIR}/${ASSET}"
+mv -f "${WORK_DIR}/${ASSET}" "${BIN_DIR}/${BINARY}"
 
 # Create claude-switch alias
 ln -sf "${BIN_DIR}/${BINARY}" "${BIN_DIR}/${ALIAS}"
@@ -63,6 +94,7 @@ fi
 
 echo "✅  csw v${LATEST} installed to ${BIN_DIR}/${BINARY}"
 echo "    Alias: ${BIN_DIR}/${ALIAS}"
+echo "    Checksum verified. To verify build provenance: gh attestation verify ${BIN_DIR}/${BINARY} --repo ${REPO}"
 echo ""
 echo "Usage:"
 echo "  csw save work"

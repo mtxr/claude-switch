@@ -40,6 +40,10 @@ jobs:
             asset: csw-aarch64-unknown-linux-musl
             target: aarch64-linux-musl
     runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@v4
 
@@ -66,3 +70,43 @@ jobs:
           gh release upload ${{ needs.release-please.outputs.tag_name }} \
             "zig-out/bin/${{ matrix.asset }}" \
             --repo ${{ github.repository }}
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2.4.0
+        with:
+          subject-path: zig-out/bin/${{ matrix.asset }}
+
+  checksums:
+    needs: [release-please, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Generate SHA256SUMS
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir assets
+          gh release download ${{ needs.release-please.outputs.tag_name }} \
+            --repo ${{ github.repository }} \
+            --pattern 'csw-*' \
+            --dir assets
+          cd assets
+          sha256sum csw-* > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Upload SHA256SUMS to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload ${{ needs.release-please.outputs.tag_name }} \
+            assets/SHA256SUMS \
+            --repo ${{ github.repository }} \
+            --clobber
+
+      - name: Attest SHA256SUMS
+        uses: actions/attest-build-provenance@v2.4.0
+        with:
+          subject-path: assets/SHA256SUMS
