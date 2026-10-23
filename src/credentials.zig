@@ -140,6 +140,22 @@ pub fn activate(gpa: std.mem.Allocator, io: std.Io, base: []const u8, name: []co
     return true;
 }
 
+/// Copies the stored login of a profile to the per-dir entry of another name,
+/// converting a legacy entry first. Returns false when the profile has none.
+pub fn copyProfile(gpa: std.mem.Allocator, io: std.Io, base: []const u8, from: []const u8, to: []const u8) !bool {
+    if (comptime !platform.supports_keychain) return false;
+    try migrateLegacy(gpa, io, base, from);
+    const from_service = try profileService(gpa, base, from);
+    defer gpa.free(from_service);
+    const to_service = try profileService(gpa, base, to);
+    defer gpa.free(to_service);
+
+    const blob = read(gpa, io, from_service) orelse return false;
+    defer gpa.free(blob);
+    try copyEntry(gpa, io, from_service, to_service, blob);
+    return true;
+}
+
 /// Stored login blob of a profile, or null. Caller frees.
 pub fn readProfile(gpa: std.mem.Allocator, io: std.Io, base: []const u8, name: []const u8) !?[]const u8 {
     if (comptime !platform.supports_keychain) return readProfileFile(gpa, base, name);
@@ -437,6 +453,25 @@ test "readProfileFile reads the credentials file of the profile dir" {
     try std.testing.expectEqualStrings(fixture_old, blob);
 }
 
+test "copyProfile copies the per-dir login and reports a missing one" {
+    if (!keychain.realKeychainEnabled()) return error.SkipZigTest;
+    const alloc = std.testing.allocator;
+    var tio = sandboxIo();
+    defer tio.deinit();
+    const io = tio.io();
+    const sb = try Sandbox.init(alloc, io, "cp");
+    defer sb.deinit(alloc, io);
+    const to_service = try profileService(alloc, sb.base, "q");
+    defer alloc.free(to_service);
+    defer keychain.delete(alloc, io, to_service) catch {};
+
+    try std.testing.expect(!try copyProfile(alloc, io, sb.base, "p", "q"));
+    try put(alloc, io, sb.dir_service, fixture_new);
+    try std.testing.expect(try copyProfile(alloc, io, sb.base, "p", "q"));
+    try expectEntry(alloc, io, to_service, fixture_new);
+    try expectEntry(alloc, io, sb.dir_service, fixture_new);
+}
+
 test "forget removes the per-dir and legacy entries" {
     if (!keychain.realKeychainEnabled()) return error.SkipZigTest;
     const alloc = std.testing.allocator;
@@ -501,6 +536,7 @@ test "keychain operations are no-ops without Keychain support" {
     try migrateLegacy(alloc, io, "/nowhere", "p");
     try std.testing.expect(!try capture(alloc, io, "/nowhere", "p", DEFAULT_SERVICE, true));
     try std.testing.expect(!try activate(alloc, io, "/nowhere", "p", DEFAULT_SERVICE));
+    try std.testing.expect(!try copyProfile(alloc, io, "/nowhere", "p", "q"));
     try std.testing.expectEqual(@as(?[]const u8, null), try readProfile(alloc, io, "/nowhere", "p"));
     try forget(alloc, io, "/nowhere", "p");
     try std.testing.expectEqual(Status.ready, try ensure(alloc, io, "/nowhere/.claude.p", "p", DEFAULT_SERVICE, true));

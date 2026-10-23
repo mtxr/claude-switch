@@ -21,6 +21,7 @@ pub const all = [_]Command{
     .{ .name = "save", .usage = "save [name]", .summary = "Save the current Claude Code session as a named profile", .arg = .profile, .picks_name = true, .flags = product_flags },
     .{ .name = "use", .usage = "use [name]", .summary = "Switch Claude Code to a saved profile", .arg = .profile, .picks_name = true, .flags = product_flags },
     .{ .name = "switch", .usage = "switch [name]", .summary = "Deprecated alias of use", .arg = .profile, .picks_name = true, .flags = product_flags, .hidden = true },
+    .{ .name = "rename", .usage = "rename [old] <new>", .summary = "Rename a profile, its login and (with --desktop/--all) its Desktop data", .arg = .profile, .picks_name = true, .flags = product_flags },
     .{ .name = "new", .usage = "new <name>", .summary = "Create a new empty profile slot", .flags = product_flags },
     .{ .name = "delete", .usage = "delete [name]", .summary = "Delete a profile", .arg = .profile, .flags = product_flags },
     .{ .name = "list", .usage = "list", .summary = "List all saved profiles", .flags = product_flags },

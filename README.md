@@ -113,6 +113,7 @@ csw pick
 csw save [name]    Save the current Claude Code session as a named profile
 csw use [name]     Switch Claude Code to a saved profile
 csw new <name>     Create a new empty profile slot (then: claude auth login)
+csw rename [old] <new>  Rename a profile, its login and (with --desktop/--all) its Desktop data
 csw delete <name>  Delete a profile and its data
 csw list           List all saved profiles
 csw whoami         Show active session info (Code + Desktop + saved profiles)
@@ -212,6 +213,7 @@ What each command does for Desktop:
 | `csw use <name> --desktop` | Quits Desktop, swaps the data dirs and reopens it. Claude Code stays where it is. |
 | `csw new <name> --desktop` | Creates the profile and swaps Desktop to an empty data dir to log in. |
 | `csw delete <name> --desktop` | Removes `Claude.<name>/` and clears the Desktop owner if it was that profile. Without the flag the Desktop data is kept. |
+| `csw rename <old> <new> --desktop` | Renames `Claude.<old>/` to `Claude.<new>/` and updates the Desktop owner marker if it named `<old>`. Without the flag the Desktop data is left alone and csw warns when it still belongs to `<old>`. |
 | `csw list --desktop` | Marks only the Desktop profile (`--all` marks `◀ code` and `◀ desktop`). |
 | `csw pick --desktop` | `use --desktop` for the chosen profile. |
 | `csw logout-all --desktop` | Quits Desktop and removes the legacy Desktop symlink. |
@@ -219,6 +221,12 @@ What each command does for Desktop:
 `csw whoami` and `csw doctor` are read-only and always report both products, including which profile owns the Desktop data dir (and warn when it is unassigned or points at a deleted profile).
 
 csw records the owner of the main Desktop data dir in `Claude/.csw-profile`; the marker travels with the dir when it is renamed. Installs that predate the marker are assigned to the active Code profile the first time `use` or `new` runs, which matches how older versions always switched both together.
+
+### Renaming a profile
+
+`csw rename <old> <new>` renames `~/.claude.<old>.json` and `~/.claude.<old>/`, re-links the active symlinks when `<old>` is active, fixes the profile directory's own `.claude.json` link and moves the per-directory Keychain login to the new directory's entry. The new name must not exist and may use only `A-Z a-z 0-9 . _ -`. With one name and a terminal, the old profile is picked interactively.
+
+csw cannot fix what lives outside its control: update any `.csw` file naming the old profile and restart shells whose `CLAUDE_CONFIG_DIR` still points at the old directory.
 
 ### Profile switching
 
