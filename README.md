@@ -46,7 +46,7 @@ Make sure `~/.local/bin` is in your `$PATH` (add to `~/.zshrc` if needed):
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-The interactive picker needs [sk](https://github.com/lotabout/skim) or [fzf](https://github.com/junegunn/fzf):
+The interactive picker uses [sk](https://github.com/lotabout/skim) or [fzf](https://github.com/junegunn/fzf) when one is on your `PATH`, and a small built-in numbered list otherwise. Installing one is optional and only adds fuzzy search:
 
 ```bash
 brew install sk
@@ -105,7 +105,7 @@ csw new <name>       Create a new empty profile slot
 csw delete [name]    Delete a profile
 csw list             List all saved profiles
 csw whoami           Show active session info
-csw pick             Interactive profile picker (sk / fzf)
+csw pick             Interactive profile picker (sk, fzf or built-in)
 csw update [--verbose]  Update csw to the latest release
 csw logout-all       Log out and remove all active symlinks
 csw run [name] [-- args]  Run claude with a profile in this terminal only
@@ -119,7 +119,7 @@ csw man            Print the man page (roff) to stdout
 csw doctor           Check that everything csw needs is in order
 ```
 
-Commands written with `[name]` open the picker (sk, then fzf) when the name is omitted in a terminal. Without a terminal they print a usage error. Cancelling the picker exits without doing anything. `new` always needs a name, since it creates one. `save` without a name lets you pick an existing profile to overwrite. `rename` with a single name picks the old profile and uses that name as the new one.
+Commands written with `[name]` open the picker (sk, then fzf, then a built-in numbered list) when the name is omitted in a terminal. The built-in list accepts a number, a profile name or part of a name; an ambiguous part narrows the list, and an empty line cancels. Without a terminal they print a usage error. Cancelling the picker exits without doing anything. `new` always needs a name, since it creates one. `save` without a name lets you pick an existing profile to overwrite. `rename` with a single name picks the old profile and uses that name as the new one.
 
 ### Claude Code and Claude Desktop
 
@@ -204,7 +204,7 @@ On every prompt the hook finds the nearest `.csw` walking up from the current di
 - **Claude Desktop** (macOS) — `Claude.app`, the process, `Claude Safe Storage`, the data dir, the cookies DB and the session cookie.
 - **Profiles** — active and saved profiles, the Desktop owner, profile json without a directory, orphan directories, an inner `.claude.json` that became a regular file, profiles without a stored login, leftover legacy `csw-code-*` entries (macOS), and a profile whose login sits in both the live entry and its per-directory entry.
 - **Shell** — what `CLAUDE_CONFIG_DIR` points at, the `.csw` that applies here, and whether the hook is loaded. The hook is reported as "not detected (optional)" unless a `.csw` applies and the hook is clearly missing.
-- **Tools** — whether `sk` or `fzf` is installed.
+- **Tools** — which picker is used: `sk`, `fzf` or the built-in one. A missing `sk`/`fzf` is not a problem.
 
 Only the macOS Desktop checks can produce `[fail]` (missing app, missing key, data dir or cookies DB). A `[fail]` makes the command exit non-zero; warnings never do.
 

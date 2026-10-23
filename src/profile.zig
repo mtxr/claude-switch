@@ -6,6 +6,7 @@ const desktop = @import("desktop.zig");
 const display = @import("display.zig");
 const keychain = @import("keychain.zig");
 const paths = @import("paths.zig");
+const picker = @import("picker.zig");
 const platform = @import("platform.zig");
 const session = @import("session.zig");
 
@@ -609,8 +610,7 @@ pub fn pickerName(line: []const u8) []const u8 {
 }
 
 fn fuzzyPick(gpa: std.mem.Allocator, io: std.Io, base: []const u8, profiles: []const []const u8, prompt: []const u8) !?[]const u8 {
-    const cmd = try fuzzyCmd(gpa, io);
-    defer gpa.free(cmd);
+    const cmd = picker.systemCommand() orelse return builtinPick(gpa, base, profiles, prompt);
 
     const items = try pickerLinesIn(gpa, base, profiles);
     defer {
@@ -653,21 +653,21 @@ fn fuzzyPick(gpa: std.mem.Allocator, io: std.Io, base: []const u8, profiles: []c
     return try gpa.dupe(u8, chosen);
 }
 
-fn fuzzyCmd(gpa: std.mem.Allocator, io: std.Io) ![]const u8 {
-    for (&[_][]const u8{ "sk", "fzf" }) |cmd| {
-        const result = std.process.run(gpa, io, .{
-            .argv = &.{ "which", cmd },
-            .stdout_limit = .limited(1024),
-            .stderr_limit = .limited(1024),
-        }) catch continue;
-        defer gpa.free(result.stdout);
-        defer gpa.free(result.stderr);
-        if (result.term == .exited and result.term.exited == 0) return gpa.dupe(u8, cmd);
+fn builtinPick(gpa: std.mem.Allocator, base: []const u8, profiles: []const []const u8, prompt: []const u8) !?[]const u8 {
+    const items = try pickerLinesIn(gpa, base, profiles);
+    defer {
+        for (items) |l| gpa.free(l);
+        gpa.free(items);
     }
-    var hint_buf: [128]u8 = undefined;
-    const hint = std.fmt.bufPrint(&hint_buf, "sk or fzf not found. Install with: {s}", .{platform.picker_install_hint}) catch "sk or fzf not found.";
-    display.err(hint);
-    return error.FuzzyNotFound;
+
+    const term = picker.Terminal.open() orelse {
+        display.err("No terminal available for the profile picker");
+        return error.NoTerminal;
+    };
+    defer term.close();
+
+    const index = (try picker.interact(gpa, term, profiles, items, prompt)) orelse return null;
+    return try gpa.dupe(u8, profiles[index]);
 }
 
 fn deleteTreeC(gpa: std.mem.Allocator, io: std.Io, path: []const u8) !void {
