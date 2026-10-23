@@ -11,6 +11,7 @@ const keychain = @import("keychain.zig");
 const manpage = @import("manpage.zig");
 const desktop = @import("desktop.zig");
 const paths = @import("paths.zig");
+const picker = @import("picker.zig");
 const platform = @import("platform.zig");
 const profile = @import("profile.zig");
 const rename = @import("rename.zig");
@@ -26,6 +27,7 @@ comptime {
     _ = @import("manpage.zig");
     _ = @import("desktop.zig");
     _ = @import("paths.zig");
+    _ = @import("picker.zig");
     _ = @import("platform.zig");
     _ = @import("bind.zig");
     _ = @import("commands.zig");
@@ -349,7 +351,7 @@ fn printHelp(gpa: std.mem.Allocator) void {
         \\
         \\COMMANDS:
         \\{s}
-        \\Commands with [name] open the picker (sk / fzf) when the name is omitted in a terminal.
+        \\Commands with [name] open the picker (sk, fzf or built-in) when the name is omitted in a terminal.
         \\
         \\OPTIONS:
         \\  --desktop        Apply save, use, new, delete, list, pick and logout-all
@@ -518,25 +520,12 @@ fn cmdDoctor(gpa: std.mem.Allocator, io: std.Io) !void {
 
     display.print("\n  Tools\n  ──────────────────────────────────\n", .{});
 
-    var found_picker = false;
-    for (&[_][]const u8{ "sk", "fzf" }) |cmd| {
-        const result = std.process.run(gpa, io, .{
-            .argv = &.{ "which", cmd },
-            .stdout_limit = .limited(256),
-            .stderr_limit = .limited(256),
-        }) catch continue;
-        defer gpa.free(result.stdout);
-        defer gpa.free(result.stderr);
-        if (result.term == .exited and result.term.exited == 0) {
-            doctorOk("Fuzzy picker", cmd);
-            found_picker = true;
-            break;
-        }
-    }
-    if (!found_picker) {
-        var hint_buf: [128]u8 = undefined;
-        const hint = std.fmt.bufPrint(&hint_buf, "sk/fzf not found — install: {s}", .{platform.picker_install_hint}) catch "sk/fzf not found";
-        doctorWarn("Fuzzy picker", hint);
+    if (picker.systemCommand()) |cmd| {
+        doctorOk("Picker", cmd);
+    } else {
+        var detail_buf: [128]u8 = undefined;
+        const detail = std.fmt.bufPrint(&detail_buf, "built-in (for fuzzy search install: {s})", .{platform.picker_install_hint}) catch "built-in";
+        doctorOk("Picker", detail);
     }
 
     display.print("\n", .{});

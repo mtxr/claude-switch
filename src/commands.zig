@@ -26,7 +26,7 @@ pub const all = [_]Command{
     .{ .name = "delete", .usage = "delete [name]", .summary = "Delete a profile", .arg = .profile, .flags = product_flags },
     .{ .name = "list", .usage = "list", .summary = "List all saved profiles", .flags = product_flags },
     .{ .name = "whoami", .usage = "whoami", .summary = "Show active session info" },
-    .{ .name = "pick", .usage = "pick", .summary = "Interactive profile picker (sk / fzf)", .flags = product_flags },
+    .{ .name = "pick", .usage = "pick", .summary = "Interactive profile picker (sk, fzf or built-in)", .flags = product_flags },
     .{ .name = "update", .usage = "update [--verbose]", .summary = "Update csw to the latest release", .flags = &.{"--verbose"}, .skips_update_check = true },
     .{ .name = "logout-all", .usage = "logout-all", .summary = "Log out and remove all active symlinks", .flags = product_flags },
     .{ .name = "run", .usage = "run [name] [-- args]", .summary = "Run claude with a profile in this terminal only", .arg = .profile, .picks_name = true },
