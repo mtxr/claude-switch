@@ -150,26 +150,30 @@ fn run(gpa: std.mem.Allocator, io: std.Io, args: []const []const u8) !void {
 
     const opts = parseOptions(args);
 
+    const interactive = std.c.isatty(std.posix.STDIN_FILENO) == 1;
+    const given = firstPositional(args);
+    const name_source = nameSource(given, commandPicksName(cmd), interactive);
+
     const needsName = struct {
-        fn check(a: []const []const u8, c: []const u8) ![]const u8 {
-            return firstPositional(a) orelse {
-                display.print("❌  Usage: csw {s} <name>\n", .{c});
-                return error.MissingArg;
-            };
+        fn check(c: []const u8) error{MissingArg} {
+            display.print("❌  Usage: csw {s} <name>\n", .{c});
+            return error.MissingArg;
         }
     }.check;
 
     if (std.mem.eql(u8, cmd, "save")) {
-        return profile.cmdSave(gpa, io, try needsName(args, "save"), opts);
-    } else if (std.mem.eql(u8, cmd, "use")) {
-        return profile.cmdUse(gpa, io, try needsName(args, "use"), opts);
-    } else if (std.mem.eql(u8, cmd, "switch")) {
-        display.info("'switch' is deprecated, use 'use' instead");
-        return profile.cmdUse(gpa, io, try needsName(args, "switch"), opts);
+        const name = (try resolveName(gpa, io, given, name_source, cmd, "Overwrite profile > ")) orelse return;
+        defer gpa.free(name);
+        return profile.cmdSave(gpa, io, name, opts);
+    } else if (std.mem.eql(u8, cmd, "use") or std.mem.eql(u8, cmd, "switch")) {
+        if (std.mem.eql(u8, cmd, "switch")) display.info("'switch' is deprecated, use 'use' instead");
+        const name = (try resolveName(gpa, io, given, name_source, cmd, "Pick profile > ")) orelse return;
+        defer gpa.free(name);
+        return profile.cmdUse(gpa, io, name, opts);
     } else if (std.mem.eql(u8, cmd, "new")) {
-        return profile.cmdNew(gpa, io, try needsName(args, "new"), opts);
+        return profile.cmdNew(gpa, io, given orelse return needsName(cmd), opts);
     } else if (std.mem.eql(u8, cmd, "delete")) {
-        return profile.cmdDelete(gpa, io, firstPositional(args), opts);
+        return profile.cmdDelete(gpa, io, given, opts);
     } else if (std.mem.eql(u8, cmd, "list")) {
         return profile.cmdList(gpa, io, opts);
     } else if (std.mem.eql(u8, cmd, "whoami")) {
@@ -182,19 +186,27 @@ fn run(gpa: std.mem.Allocator, io: std.Io, args: []const []const u8) !void {
         const verbose = args.len >= 2 and std.mem.eql(u8, args[1], "--verbose");
         return cmdUpdate(gpa, io, verbose);
     } else if (std.mem.eql(u8, cmd, "run")) {
-        return run_cmd.cmdRun(gpa, io, try needsName(args, "run"), args[2..]);
+        const name = (try resolveName(gpa, io, given, name_source, cmd, "Run with profile > ")) orelse return;
+        defer gpa.free(name);
+        return run_cmd.cmdRun(gpa, io, name, forwardedClaudeArgs(args, given != null));
     } else if (std.mem.eql(u8, cmd, "login")) {
-        return run_cmd.cmdLogin(gpa, io, try needsName(args, "login"));
+        const name = (try resolveName(gpa, io, given, name_source, cmd, "Log in profile > ")) orelse return;
+        defer gpa.free(name);
+        return run_cmd.cmdLogin(gpa, io, name);
     } else if (std.mem.eql(u8, cmd, "env") and hasFlag(args, FROM_CWD_FLAG)) {
         return bind.cmdEnvFromCwd(gpa, io);
     } else if (std.mem.eql(u8, cmd, "env")) {
-        return run_cmd.cmdEnv(gpa, try needsName(args, "env"));
+        const name = (try resolveName(gpa, io, given, name_source, cmd, "Export profile > ")) orelse return;
+        defer gpa.free(name);
+        return run_cmd.cmdEnv(gpa, name);
     } else if (std.mem.eql(u8, cmd, "bind")) {
-        return bind.cmdBind(gpa, try needsName(args, "bind"));
+        const name = (try resolveName(gpa, io, given, name_source, cmd, "Bind profile > ")) orelse return;
+        defer gpa.free(name);
+        return bind.cmdBind(gpa, name);
     } else if (std.mem.eql(u8, cmd, "unbind")) {
         return bind.cmdUnbind(gpa);
     } else if (std.mem.eql(u8, cmd, "hook")) {
-        return bind.cmdHook(try needsName(args, "hook"));
+        return bind.cmdHook(given orelse return needsName(cmd));
     } else if (std.mem.eql(u8, cmd, "logout-all")) {
         return profile.cmdLogoutAll(gpa, io, opts);
     } else if (std.mem.eql(u8, cmd, "--version") or std.mem.eql(u8, cmd, "-v")) {
@@ -206,6 +218,40 @@ fn run(gpa: std.mem.Allocator, io: std.Io, args: []const []const u8) !void {
         printHelp();
         return error.UnknownCommand;
     }
+}
+
+const NameSource = enum { given, pick, usage };
+
+pub fn commandPicksName(cmd: []const u8) bool {
+    const picking = [_][]const u8{ "save", "use", "switch", "run", "login", "env", "bind" };
+    for (picking) |name| {
+        if (std.mem.eql(u8, cmd, name)) return true;
+    }
+    return false;
+}
+
+pub fn nameSource(given: ?[]const u8, can_pick: bool, interactive: bool) NameSource {
+    if (given != null) return .given;
+    if (can_pick and interactive) return .pick;
+    return .usage;
+}
+
+/// Arguments after the profile name that `csw run` forwards to claude; empty
+/// when the name came from the picker.
+pub fn forwardedClaudeArgs(args: []const []const u8, name_given: bool) []const []const u8 {
+    if (!name_given or args.len < 3) return &.{};
+    return args[2..];
+}
+
+fn resolveName(gpa: std.mem.Allocator, io: std.Io, given: ?[]const u8, source: NameSource, cmd: []const u8, prompt: []const u8) !?[]const u8 {
+    return switch (source) {
+        .given => try gpa.dupe(u8, given.?),
+        .pick => try profile.pickName(gpa, io, prompt),
+        .usage => {
+            display.print("❌  Usage: csw {s} <name>\n", .{cmd});
+            return error.MissingArg;
+        },
+    };
 }
 
 fn hasFlag(args: []const []const u8, flag: []const u8) bool {
@@ -237,8 +283,8 @@ fn printHelp() void {
         \\  csw <command> [name]
         \\
         \\COMMANDS:
-        \\  save <name>      Save the current Claude Code session as a named profile
-        \\  use <name>       Switch Claude Code to a saved profile
+        \\  save [name]      Save the current Claude Code session as a named profile
+        \\  use [name]       Switch Claude Code to a saved profile
         \\  new <name>       Create a new empty profile slot
         \\  delete [name]    Delete a profile
         \\  list             List all saved profiles
@@ -246,13 +292,15 @@ fn printHelp() void {
         \\  pick             Interactive profile picker (sk / fzf)
         \\  update [--verbose]  Update csw to the latest release
         \\  logout-all       Log out and remove all active symlinks
-        \\  run <name> [-- args]  Run claude with a profile in this terminal only
-        \\  login <name>     Start claude for a profile and log in once
-        \\  env <name>       Print `export CLAUDE_CONFIG_DIR=...` for a profile
-        \\  bind <name>      Bind the current directory to a profile (.csw)
+        \\  run [name] [-- args]  Run claude with a profile in this terminal only
+        \\  login [name]     Start claude for a profile and log in once
+        \\  env [name]       Print `export CLAUDE_CONFIG_DIR=...` for a profile
+        \\  bind [name]      Bind the current directory to a profile (.csw)
         \\  unbind           Remove the .csw binding from the current directory
         \\  hook <shell>     Print the shell hook (zsh|bash): eval "$(csw hook zsh)"
         \\  doctor           Check that everything csw needs is in order
+        \\
+        \\Commands with [name] open the picker (sk / fzf) when the name is omitted in a terminal.
         \\
         \\OPTIONS:
         \\  --desktop        Apply save, use, new, delete, list, pick and logout-all
@@ -711,4 +759,31 @@ test "firstPositional skips the desktop flag" {
     try std.testing.expectEqualStrings("work", firstPositional(&.{ "use", "--all", "work" }).?);
     try std.testing.expect(firstPositional(&.{ "delete", "--desktop" }) == null);
     try std.testing.expect(firstPositional(&.{"list"}) == null);
+}
+
+test "commandPicksName covers the commands that take a profile" {
+    for ([_][]const u8{ "save", "use", "switch", "run", "login", "env", "bind" }) |cmd| {
+        try std.testing.expect(commandPicksName(cmd));
+    }
+    for ([_][]const u8{ "new", "delete", "hook", "list", "whoami", "" }) |cmd| {
+        try std.testing.expect(!commandPicksName(cmd));
+    }
+}
+
+test "nameSource prefers the given name, then the picker, then usage" {
+    try std.testing.expectEqual(NameSource.given, nameSource("work", true, true));
+    try std.testing.expectEqual(NameSource.given, nameSource("work", false, false));
+    try std.testing.expectEqual(NameSource.pick, nameSource(null, true, true));
+    try std.testing.expectEqual(NameSource.usage, nameSource(null, true, false));
+    try std.testing.expectEqual(NameSource.usage, nameSource(null, false, true));
+}
+
+test "forwardedClaudeArgs drops the name and ignores a picked one" {
+    const with_args: []const []const u8 = &.{ "run", "work", "--", "-p", "hi" };
+    try std.testing.expectEqual(@as(usize, 3), forwardedClaudeArgs(with_args, true).len);
+    try std.testing.expectEqual(@as(usize, 0), forwardedClaudeArgs(with_args, false).len);
+    const bare: []const []const u8 = &.{ "run", "work" };
+    try std.testing.expectEqual(@as(usize, 0), forwardedClaudeArgs(bare, true).len);
+    const none: []const []const u8 = &.{"run"};
+    try std.testing.expectEqual(@as(usize, 0), forwardedClaudeArgs(none, false).len);
 }
