@@ -11,6 +11,7 @@ const desktop = @import("desktop.zig");
 const paths = @import("paths.zig");
 const platform = @import("platform.zig");
 const profile = @import("profile.zig");
+const rename = @import("rename.zig");
 const run_cmd = @import("run.zig");
 const session = @import("session.zig");
 const version = @import("version.zig");
@@ -27,6 +28,7 @@ comptime {
     _ = @import("completion.zig");
     _ = @import("credentials.zig");
     _ = @import("profile.zig");
+    _ = @import("rename.zig");
     _ = @import("run.zig");
     _ = @import("session.zig");
     _ = @import("version.zig");
@@ -180,6 +182,19 @@ fn run(gpa: std.mem.Allocator, io: std.Io, args: []const []const u8) !void {
         return profile.cmdUse(gpa, io, name, opts);
     } else if (std.mem.eql(u8, cmd, "new")) {
         return profile.cmdNew(gpa, io, given orelse return needsName(cmd), opts);
+    } else if (std.mem.eql(u8, cmd, "rename")) {
+        switch (rename.parseArgs(given, secondPositional(args), interactive)) {
+            .pair => |names| return rename.cmdRename(gpa, io, names.old, names.new, opts),
+            .pick_old => |new_name| {
+                const old = (try profile.pickName(gpa, io, "Rename profile > ")) orelse return;
+                defer gpa.free(old);
+                return rename.cmdRename(gpa, io, old, new_name, opts);
+            },
+            .usage => {
+                display.print("❌  Usage: csw rename [old] <new>\n", .{});
+                return error.MissingArg;
+            },
+        }
     } else if (std.mem.eql(u8, cmd, "delete")) {
         return profile.cmdDelete(gpa, io, given, opts);
     } else if (std.mem.eql(u8, cmd, "list")) {
@@ -282,6 +297,17 @@ fn parseOptions(args: []const []const u8) profile.Options {
     if (hasFlag(args, ALL_FLAG)) return profile.Options.both;
     if (hasFlag(args, DESKTOP_FLAG)) return .{ .code = false, .desktop = true };
     return .{};
+}
+
+fn secondPositional(args: []const []const u8) ?[]const u8 {
+    var seen: usize = 0;
+    for (args[1..]) |arg| {
+        const is_flag = std.mem.eql(u8, arg, DESKTOP_FLAG) or std.mem.eql(u8, arg, ALL_FLAG);
+        if (is_flag) continue;
+        seen += 1;
+        if (seen == 2) return arg;
+    }
+    return null;
 }
 
 fn firstPositional(args: []const []const u8) ?[]const u8 {
@@ -764,8 +790,16 @@ test "firstPositional skips the desktop flag" {
     try std.testing.expect(firstPositional(&.{"list"}) == null);
 }
 
+test "secondPositional skips the product flags" {
+    try std.testing.expectEqualStrings("job", secondPositional(&.{ "rename", "work", "job" }).?);
+    try std.testing.expectEqualStrings("job", secondPositional(&.{ "rename", "--all", "work", "job" }).?);
+    try std.testing.expectEqualStrings("job", secondPositional(&.{ "rename", "work", "--desktop", "job" }).?);
+    try std.testing.expect(secondPositional(&.{ "rename", "work" }) == null);
+    try std.testing.expect(secondPositional(&.{ "rename", "work", "--all" }) == null);
+}
+
 test "commandPicksName covers the commands that take a profile" {
-    for ([_][]const u8{ "save", "use", "switch", "run", "login", "env", "bind" }) |cmd| {
+    for ([_][]const u8{ "save", "use", "switch", "run", "login", "env", "bind", "rename" }) |cmd| {
         try std.testing.expect(commandPicksName(cmd));
     }
     for ([_][]const u8{ "new", "delete", "hook", "list", "whoami", "" }) |cmd| {

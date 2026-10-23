@@ -279,7 +279,7 @@ test "bash script lists the visible commands and registers itself" {
     const script = try render(alloc, .bash);
     defer alloc.free(script);
     try expectContains(script, "complete -F _csw csw");
-    try expectContains(script, "compgen -W \"save use new delete list whoami pick update logout-all run login env bind unbind hook completion doctor\"");
+    try expectContains(script, "compgen -W \"save use rename new delete list whoami pick update logout-all run login env bind unbind hook completion doctor\"");
 }
 
 test "bash script offers flags, profiles and shells where they apply" {
