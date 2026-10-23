@@ -8,6 +8,7 @@ const completion = @import("completion.zig");
 const credentials = @import("credentials.zig");
 const doctor = @import("doctor.zig");
 const keychain = @import("keychain.zig");
+const manpage = @import("manpage.zig");
 const desktop = @import("desktop.zig");
 const paths = @import("paths.zig");
 const platform = @import("platform.zig");
@@ -21,6 +22,7 @@ comptime {
     _ = @import("crypto.zig");
     _ = @import("display.zig");
     _ = @import("keychain.zig");
+    _ = @import("manpage.zig");
     _ = @import("desktop.zig");
     _ = @import("paths.zig");
     _ = @import("platform.zig");
@@ -40,6 +42,7 @@ const KEYCHAIN_CODE = "Claude Code-credentials";
 const DESKTOP_FLAG = "--desktop";
 const ALL_FLAG = "--all";
 const FROM_CWD_FLAG = "--from-cwd";
+const SHELL_FLAG = "--shell";
 const GITHUB_REPO = "mtxr/claude-switch";
 const VERSION = "0.2.6"; // x-release-please-version
 const UPDATE_CACHE_FILE = "/tmp/csw-update-cache";
@@ -219,7 +222,7 @@ fn run(gpa: std.mem.Allocator, io: std.Io, args: []const []const u8) !void {
         defer gpa.free(name);
         return run_cmd.cmdLogin(gpa, io, name);
     } else if (std.mem.eql(u8, cmd, "env") and hasFlag(args, FROM_CWD_FLAG)) {
-        return bind.cmdEnvFromCwd(gpa, io);
+        return bind.cmdEnvFromCwd(gpa, io, shellFlag(args));
     } else if (std.mem.eql(u8, cmd, "env")) {
         const name = (try resolveName(gpa, io, given, name_source, cmd, "Export profile > ")) orelse return;
         defer gpa.free(name);
@@ -234,6 +237,8 @@ fn run(gpa: std.mem.Allocator, io: std.Io, args: []const []const u8) !void {
         return bind.cmdHook(gpa, given orelse return needsShell(cmd));
     } else if (std.mem.eql(u8, cmd, "completion")) {
         return completion.cmdCompletion(gpa, given orelse return needsShell(cmd));
+    } else if (std.mem.eql(u8, cmd, "man")) {
+        return manpage.cmdMan(gpa, VERSION);
     } else if (std.mem.eql(u8, cmd, "_profiles")) {
         return cmdProfiles(gpa);
     } else if (std.mem.eql(u8, cmd, "logout-all")) {
@@ -293,6 +298,15 @@ fn hasFlag(args: []const []const u8, flag: []const u8) bool {
         if (std.mem.eql(u8, arg, flag)) return true;
     }
     return false;
+}
+
+fn shellFlag(args: []const []const u8) bind.Syntax {
+    for (args[1..], 1..) |arg, i| {
+        if (!std.mem.eql(u8, arg, SHELL_FLAG) or i + 1 >= args.len) continue;
+        const shell = completion.parseShell(args[i + 1]) orelse return .posix;
+        return bind.syntaxFor(shell);
+    }
+    return .posix;
 }
 
 fn parseOptions(args: []const []const u8) profile.Options {
@@ -814,6 +828,14 @@ test "firstPositional skips the desktop flag" {
     try std.testing.expectEqualStrings("work", firstPositional(&.{ "use", "--all", "work" }).?);
     try std.testing.expect(firstPositional(&.{ "delete", "--desktop" }) == null);
     try std.testing.expect(firstPositional(&.{"list"}) == null);
+}
+
+test "shellFlag selects fish syntax only for an explicit fish value" {
+    try std.testing.expectEqual(bind.Syntax.posix, shellFlag(&.{ "env", "--from-cwd" }));
+    try std.testing.expectEqual(bind.Syntax.fish, shellFlag(&.{ "env", "--from-cwd", "--shell", "fish" }));
+    try std.testing.expectEqual(bind.Syntax.posix, shellFlag(&.{ "env", "--from-cwd", "--shell", "zsh" }));
+    try std.testing.expectEqual(bind.Syntax.posix, shellFlag(&.{ "env", "--from-cwd", "--shell", "nushell" }));
+    try std.testing.expectEqual(bind.Syntax.posix, shellFlag(&.{ "env", "--from-cwd", "--shell" }));
 }
 
 test "secondPositional skips the product flags" {
