@@ -1,0 +1,33 @@
+name: Nix
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  nix:
+    name: Nix build & check (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: DeterminateSystems/nix-installer-action@v20
+
+      - name: Build
+        run: nix build --print-build-logs
+
+      - name: Flake check
+        run: nix flake check --print-build-logs
+
+      - name: Upload resolved flake.lock
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: flake-lock
+          path: flake.lock
+          if-no-files-found: warn
