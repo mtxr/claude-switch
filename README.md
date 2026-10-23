@@ -110,8 +110,8 @@ csw pick
 ## Usage
 
 ```
-csw save <name>    Save the current Claude Code session as a named profile
-csw use <name>     Switch Claude Code to a saved profile
+csw save [name]    Save the current Claude Code session as a named profile
+csw use [name]     Switch Claude Code to a saved profile
 csw new <name>     Create a new empty profile slot (then: claude auth login)
 csw delete <name>  Delete a profile and its data
 csw list           List all saved profiles
@@ -119,13 +119,15 @@ csw whoami         Show active session info (Code + Desktop + saved profiles)
 csw pick           Interactive fuzzy picker (sk / fzf)
 csw update         Update csw to the latest release
 csw logout-all     Log out of all accounts and remove active symlinks
-csw run <name> [-- <claude args>]  Run claude with a profile in this terminal only
-csw login <name>   Start claude for a profile and log in once
-csw env <name>     Print `export CLAUDE_CONFIG_DIR=...` (use with eval)
-csw bind <name>    Bind the current directory to a profile (writes .csw)
+csw run [name] [-- <claude args>]  Run claude with a profile in this terminal only
+csw login [name]   Start claude for a profile and log in once
+csw env [name]     Print `export CLAUDE_CONFIG_DIR=...` (use with eval)
+csw bind [name]    Bind the current directory to a profile (writes .csw)
 csw unbind         Remove the .csw binding from the current directory
 csw hook <shell>   Print the shell hook for zsh or bash
 ```
+
+Commands written with `[name]` open the interactive picker (sk or fzf) when the name is omitted in a terminal. `csw save` then lists the existing profiles so you can pick one to overwrite; `csw new` always needs a name because it creates one. Cancelling the picker exits without doing anything, and outside a terminal the usage error is shown instead.
 
 ### Concurrent profiles (Claude Code only)
 

@@ -22,7 +22,6 @@ pub const Options = struct {
     pub const both: Options = .{ .code = true, .desktop = true };
 };
 
-
 pub fn list(gpa: std.mem.Allocator) ![]const []const u8 {
     const h = try paths.home(gpa);
     defer gpa.free(h);
@@ -342,10 +341,23 @@ pub fn listMarker(is_code: bool, is_desktop: bool, show: Options) []const u8 {
 }
 
 pub fn cmdPick(gpa: std.mem.Allocator, io: std.Io, opts: Options) !void {
+    if (try pickName(gpa, io, "Pick profile > ")) |chosen| {
+        defer gpa.free(chosen);
+        try cmdUse(gpa, io, chosen, opts);
+    }
+}
+
+/// Lets the user choose a saved profile. Returns null when the picker is
+/// cancelled and `error.NoProfiles` when there is nothing to choose from.
+/// Caller frees the name.
+pub fn pickName(gpa: std.mem.Allocator, io: std.Io, prompt: []const u8) !?[]const u8 {
     const h = try paths.home(gpa);
     defer gpa.free(h);
+    return pickNameIn(gpa, io, h, prompt);
+}
 
-    const profiles = try listIn(gpa, h);
+pub fn pickNameIn(gpa: std.mem.Allocator, io: std.Io, base: []const u8, prompt: []const u8) !?[]const u8 {
+    const profiles = try listIn(gpa, base);
     defer {
         for (profiles) |p| gpa.free(p);
         gpa.free(profiles);
@@ -356,10 +368,7 @@ pub fn cmdPick(gpa: std.mem.Allocator, io: std.Io, opts: Options) !void {
         return error.NoProfiles;
     }
 
-    if (try fuzzyPick(gpa, io, h, profiles, "Pick profile > ")) |chosen| {
-        defer gpa.free(chosen);
-        try cmdUse(gpa, io, chosen, opts);
-    }
+    return fuzzyPick(gpa, io, base, profiles, prompt);
 }
 
 pub fn cmdLogoutAll(gpa: std.mem.Allocator, io: std.Io, opts: Options) !void {
@@ -394,7 +403,6 @@ pub fn cmdLogoutAll(gpa: std.mem.Allocator, io: std.Io, opts: Options) !void {
         display.ok("Claude Desktop closed.");
     }
 }
-
 
 pub fn listIn(gpa: std.mem.Allocator, base: []const u8) ![]const []const u8 {
     var results: std.ArrayList([]const u8) = .empty;
@@ -562,7 +570,7 @@ fn ensureCurrentSavedIn(gpa: std.mem.Allocator, io: std.Io, base: []const u8) !v
     var name_buf: [256]u8 = undefined;
     var n: usize = 0;
     while (n < name_buf.len - 1) {
-        const ch_n = std.c.read(std.posix.STDIN_FILENO, name_buf[n..n+1].ptr, 1);
+        const ch_n = std.c.read(std.posix.STDIN_FILENO, name_buf[n .. n + 1].ptr, 1);
         if (ch_n <= 0) break;
         if (name_buf[n] == '\n') break;
         n += 1;
@@ -671,7 +679,6 @@ fn deleteTreeC(gpa: std.mem.Allocator, io: std.Io, path: []const u8) !void {
     gpa.free(result.stdout);
     gpa.free(result.stderr);
 }
-
 
 test "listIn empty dir" {
     const alloc = std.testing.allocator;
@@ -1197,6 +1204,15 @@ test "logout-all removes active symlinks (without Desktop only)" {
     var buf: [std.fs.max_path_bytes]u8 = undefined;
     try std.testing.expectEqual(@as(?[]const u8, null), try td.linkTarget(alloc, ".claude.json", &buf));
     try std.testing.expect(try td.exists(alloc, ".claude.work.json"));
+}
+
+test "pickNameIn fails when there are no profiles" {
+    const alloc = std.testing.allocator;
+    var td = try TestDir.init(alloc);
+    defer td.deinit(alloc);
+    var tio = testIo();
+    defer tio.deinit();
+    try std.testing.expectError(error.NoProfiles, pickNameIn(alloc, tio.io(), td.base, "Pick > "));
 }
 
 test "listMarker follows the selected products" {
