@@ -3,6 +3,8 @@
 const std = @import("std");
 const display = @import("display.zig");
 const bind = @import("bind.zig");
+const commands = @import("commands.zig");
+const completion = @import("completion.zig");
 const credentials = @import("credentials.zig");
 const keychain = @import("keychain.zig");
 const desktop = @import("desktop.zig");
@@ -21,6 +23,8 @@ comptime {
     _ = @import("paths.zig");
     _ = @import("platform.zig");
     _ = @import("bind.zig");
+    _ = @import("commands.zig");
+    _ = @import("completion.zig");
     _ = @import("credentials.zig");
     _ = @import("profile.zig");
     _ = @import("run.zig");
@@ -139,11 +143,9 @@ fn run(gpa: std.mem.Allocator, io: std.Io, args: []const []const u8) !void {
         return;
     }
 
-    const skip_check = std.mem.eql(u8, cmd, "update") or
+    const skip_check = commands.skipsUpdateCheck(cmd) or
         std.mem.eql(u8, cmd, "--version") or
-        std.mem.eql(u8, cmd, "-v") or
-        std.mem.eql(u8, cmd, "env") or
-        std.mem.eql(u8, cmd, "hook");
+        std.mem.eql(u8, cmd, "-v");
     if (!skip_check) checkUpdateSilent(gpa, io);
 
     if (args.len == 0) return profile.cmdPick(gpa, io, .{});
@@ -157,6 +159,12 @@ fn run(gpa: std.mem.Allocator, io: std.Io, args: []const []const u8) !void {
     const needsName = struct {
         fn check(c: []const u8) error{MissingArg} {
             display.print("❌  Usage: csw {s} <name>\n", .{c});
+            return error.MissingArg;
+        }
+    }.check;
+    const needsShell = struct {
+        fn check(c: []const u8) error{MissingArg} {
+            display.print("❌  Usage: csw {s} <shell>\n", .{c});
             return error.MissingArg;
         }
     }.check;
@@ -206,16 +214,20 @@ fn run(gpa: std.mem.Allocator, io: std.Io, args: []const []const u8) !void {
     } else if (std.mem.eql(u8, cmd, "unbind")) {
         return bind.cmdUnbind(gpa);
     } else if (std.mem.eql(u8, cmd, "hook")) {
-        return bind.cmdHook(given orelse return needsName(cmd));
+        return bind.cmdHook(gpa, given orelse return needsShell(cmd));
+    } else if (std.mem.eql(u8, cmd, "completion")) {
+        return completion.cmdCompletion(gpa, given orelse return needsShell(cmd));
+    } else if (std.mem.eql(u8, cmd, "_profiles")) {
+        return cmdProfiles(gpa);
     } else if (std.mem.eql(u8, cmd, "logout-all")) {
         return profile.cmdLogoutAll(gpa, io, opts);
     } else if (std.mem.eql(u8, cmd, "--version") or std.mem.eql(u8, cmd, "-v")) {
         display.print("csw {s}\n", .{VERSION});
     } else if (std.mem.eql(u8, cmd, "--help") or std.mem.eql(u8, cmd, "-h")) {
-        printHelp();
+        printHelp(gpa);
     } else {
         display.print("❌  Unknown command: {s}\n\n", .{cmd});
-        printHelp();
+        printHelp(gpa);
         return error.UnknownCommand;
     }
 }
@@ -223,11 +235,16 @@ fn run(gpa: std.mem.Allocator, io: std.Io, args: []const []const u8) !void {
 const NameSource = enum { given, pick, usage };
 
 pub fn commandPicksName(cmd: []const u8) bool {
-    const picking = [_][]const u8{ "save", "use", "switch", "run", "login", "env", "bind" };
-    for (picking) |name| {
-        if (std.mem.eql(u8, cmd, name)) return true;
+    return commands.picksName(cmd);
+}
+
+fn cmdProfiles(gpa: std.mem.Allocator) !void {
+    const names = profile.list(gpa) catch return;
+    defer {
+        for (names) |name| gpa.free(name);
+        gpa.free(names);
     }
-    return false;
+    for (names) |name| display.print("{s}\n", .{name});
 }
 
 pub fn nameSource(given: ?[]const u8, can_pick: bool, interactive: bool) NameSource {
@@ -275,7 +292,9 @@ fn firstPositional(args: []const []const u8) ?[]const u8 {
     return null;
 }
 
-fn printHelp() void {
+fn printHelp(gpa: std.mem.Allocator) void {
+    const lines = commands.renderHelpLines(gpa) catch return;
+    defer gpa.free(lines);
     display.print(
         \\csw — Claude account switcher
         \\
@@ -283,23 +302,7 @@ fn printHelp() void {
         \\  csw <command> [name]
         \\
         \\COMMANDS:
-        \\  save [name]      Save the current Claude Code session as a named profile
-        \\  use [name]       Switch Claude Code to a saved profile
-        \\  new <name>       Create a new empty profile slot
-        \\  delete [name]    Delete a profile
-        \\  list             List all saved profiles
-        \\  whoami           Show active session info
-        \\  pick             Interactive profile picker (sk / fzf)
-        \\  update [--verbose]  Update csw to the latest release
-        \\  logout-all       Log out and remove all active symlinks
-        \\  run [name] [-- args]  Run claude with a profile in this terminal only
-        \\  login [name]     Start claude for a profile and log in once
-        \\  env [name]       Print `export CLAUDE_CONFIG_DIR=...` for a profile
-        \\  bind [name]      Bind the current directory to a profile (.csw)
-        \\  unbind           Remove the .csw binding from the current directory
-        \\  hook <shell>     Print the shell hook (zsh|bash): eval "$(csw hook zsh)"
-        \\  doctor           Check that everything csw needs is in order
-        \\
+        \\{s}
         \\Commands with [name] open the picker (sk / fzf) when the name is omitted in a terminal.
         \\
         \\OPTIONS:
@@ -307,7 +310,7 @@ fn printHelp() void {
         \\                   to Claude Desktop only (default: Claude Code only)
         \\  --all            Apply them to Claude Code and Claude Desktop together
         \\
-    , .{});
+    , .{lines});
 }
 
 fn doctorOk(label: []const u8, detail: []const u8) void {
@@ -786,4 +789,30 @@ test "forwardedClaudeArgs drops the name and ignores a picked one" {
     try std.testing.expectEqual(@as(usize, 0), forwardedClaudeArgs(bare, true).len);
     const none: []const []const u8 = &.{"run"};
     try std.testing.expectEqual(@as(usize, 0), forwardedClaudeArgs(none, false).len);
+}
+
+test "every command dispatched by run is in the command table" {
+    const source = @embedFile("main.zig");
+    const needle = "std.mem.eql(u8, cmd, \"";
+    var rest: []const u8 = source;
+    var checked: usize = 0;
+    while (std.mem.indexOf(u8, rest, needle)) |at| {
+        const start = at + needle.len;
+        const end = std.mem.indexOfScalarPos(u8, rest, start, '"').?;
+        const name = rest[start..end];
+        rest = rest[end..];
+        if (name.len == 0 or name[0] == '-') continue;
+        try std.testing.expect(commands.find(name) != null);
+        checked += 1;
+    }
+    try std.testing.expect(checked >= commands.all.len);
+}
+
+test "every command in the table is dispatched by run" {
+    const source = @embedFile("main.zig");
+    for (commands.all) |command| {
+        const literal = try std.fmt.allocPrint(std.testing.allocator, "std.mem.eql(u8, cmd, \"{s}\")", .{command.name});
+        defer std.testing.allocator.free(literal);
+        try std.testing.expect(std.mem.indexOf(u8, source, literal) != null);
+    }
 }

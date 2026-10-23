@@ -124,7 +124,8 @@ csw login [name]   Start claude for a profile and log in once
 csw env [name]     Print `export CLAUDE_CONFIG_DIR=...` (use with eval)
 csw bind [name]    Bind the current directory to a profile (writes .csw)
 csw unbind         Remove the .csw binding from the current directory
-csw hook <shell>   Print the shell hook for zsh or bash
+csw hook <shell>   Print the shell hook plus completions for zsh or bash
+csw completion <shell>  Print only the completions for zsh or bash
 ```
 
 Commands written with `[name]` open the interactive picker (sk or fzf) when the name is omitted in a terminal. `csw save` then lists the existing profiles so you can pick one to overwrite; `csw new` always needs a name because it creates one. Cancelling the picker exits without doing anything, and outside a terminal the usage error is shown instead.
@@ -155,6 +156,18 @@ eval "$(csw hook zsh)"                      # add to ~/.zshrc (bash: eval "$(csw
 ```
 
 On every prompt the hook finds the nearest `.csw` walking up from `$PWD` and exports `CLAUDE_CONFIG_DIR=~/.claude.<name>`. Leaving the tree unsets only what the hook set; a `CLAUDE_CONFIG_DIR` you exported yourself is never touched. Only existing profiles with names matching `[A-Za-z0-9._-]` are honored, so an untrusted repo cannot inject shell through `.csw`.
+
+## Completions
+
+`eval "$(csw hook zsh)"` (or `bash`) also registers tab completion, so the line from the previous section is all you need. To get completions without the hook, add this to your shell rc:
+
+```sh
+eval "$(csw completion zsh)"    # bash: eval "$(csw completion bash)"
+```
+
+For zsh you can instead save the output as `_csw` in a directory on your `fpath`.
+
+Commands, their flags (`--desktop`, `--all`, `--from-cwd`, `--verbose`) and profile names are completed. Profile names come from `csw _profiles` at completion time, so new profiles show up without regenerating anything. The scripts are generated from the same command table that drives `csw --help`, so a new command is completed automatically. In zsh, load `compinit` before the `eval` line, or csw registers the completion on the first prompt.
 
 ## Linux
 
