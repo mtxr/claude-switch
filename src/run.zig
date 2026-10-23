@@ -55,9 +55,10 @@ fn runProfile(gpa: std.mem.Allocator, io: std.Io, name: []const u8, claude_args:
     return error.ExecFailed;
 }
 
-pub const ReportMode = enum { run, login };
+pub const ReportMode = enum { run, login, hook };
 
-/// Seeds the per-dir Keychain entry of a profile and tells the user what happened.
+/// Seeds the per-dir Keychain entry of a profile and tells the user what
+/// happened. The hook mode writes to stderr so stdout stays eval-able.
 pub fn reportCredentials(gpa: std.mem.Allocator, io: std.Io, base: []const u8, dir: []const u8, name: []const u8, mode: ReportMode) !void {
     if (comptime !platform.supports_keychain) return;
     const active = try profile.currentIn(gpa, base);
@@ -70,7 +71,7 @@ pub fn reportCredentials(gpa: std.mem.Allocator, io: std.Io, base: []const u8, d
     };
     const msg = (try credentialsMessage(gpa, status, mode, name)) orelse return;
     defer gpa.free(msg);
-    display.info(msg);
+    if (mode == .hook) display.infoErr(msg) else display.info(msg);
 }
 
 /// What to tell the user about a profile's login, or null when there is nothing to say.
@@ -216,6 +217,9 @@ test "credentialsMessage says nothing for a ready run and speaks otherwise" {
     const needs = (try credentialsMessage(alloc, .needs_login, .login, "work")).?;
     defer alloc.free(needs);
     try std.testing.expect(std.mem.indexOf(u8, needs, "/login") != null);
+
+    const ready_hook = try credentialsMessage(alloc, .ready, .hook, "work");
+    try std.testing.expectEqual(@as(?[]const u8, null), ready_hook);
 }
 
 test "isValidName" {

@@ -122,6 +122,9 @@ csw logout-all     Log out of all accounts and remove active symlinks
 csw run <name> [-- <claude args>]  Run claude with a profile in this terminal only
 csw login <name>   Start claude for a profile and log in once
 csw env <name>     Print `export CLAUDE_CONFIG_DIR=...` (use with eval)
+csw bind <name>    Bind the current directory to a profile (writes .csw)
+csw unbind         Remove the .csw binding from the current directory
+csw hook <shell>   Print the shell hook for zsh or bash
 ```
 
 ### Concurrent profiles (Claude Code only)
@@ -131,12 +134,25 @@ Claude Code keeps its Keychain login per `CLAUDE_CONFIG_DIR` (service `Claude Co
 - `csw run work [-- <claude args>]` runs `claude` for that profile in this terminal only; `csw login work` does the same and tells you to `/login` once.
 - `eval "$(csw env work)"` exports `CLAUDE_CONFIG_DIR` in the current shell.
 - First use of a profile: if it is the active one and its live login has not expired, it is reused; otherwise csw tells you to run `/login` once, and Claude Code remembers it for that profile.
-- `csw use` keeps working as before for shells that do not set the variable.
+- With `eval "$(csw hook zsh)"` (or `bash`) in your shell rc, every prompt exports `CLAUDE_CONFIG_DIR` for the nearest `.csw` binding, or else for the active profile (`csw use`). A value you set by hand is never overwritten.
+- The hook seeds a profile's Keychain entry the first time a shell enters it and prints the result on stderr, so the output stays eval-able.
+- `csw use` keeps working as before for shells that do not run the hook.
 
 Limitations:
 - Claude Code only; Claude Desktop is selected with `--desktop` or `--all`.
 - csw links `~/.claude.<name>/.claude.json` to `~/.claude.<name>.json`. If Claude Code rewrites that file atomically the link may become a regular file, which `csw use` and `csw list` will no longer see updating.
 - IDE extensions may ignore `CLAUDE_CONFIG_DIR`.
+
+## Per-directory profiles
+
+Bind a directory to a saved profile and let your shell switch `CLAUDE_CONFIG_DIR` automatically, no direnv needed:
+
+```sh
+cd ~/work/project && csw bind work          # writes .csw containing "work"
+eval "$(csw hook zsh)"                      # add to ~/.zshrc (bash: eval "$(csw hook bash)" in ~/.bashrc)
+```
+
+On every prompt the hook finds the nearest `.csw` walking up from `$PWD` and exports `CLAUDE_CONFIG_DIR=~/.claude.<name>`. Leaving the tree unsets only what the hook set; a `CLAUDE_CONFIG_DIR` you exported yourself is never touched. Only existing profiles with names matching `[A-Za-z0-9._-]` are honored, so an untrusted repo cannot inject shell through `.csw`.
 
 ## Linux
 
