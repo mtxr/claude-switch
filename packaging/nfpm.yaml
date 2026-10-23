@@ -1,0 +1,31 @@
+name: csw
+arch: ${ARCH}
+platform: linux
+version: ${VERSION}
+section: utils
+priority: optional
+maintainer: mtxr <mtxr@users.noreply.github.com>
+vendor: mtxr
+homepage: https://github.com/mtxr/claude-switch
+license: MIT
+description: |
+  Switch between Claude Code and Claude Desktop accounts.
+contents:
+  - src: ${BINARY}
+    dst: /usr/bin/csw
+    file_info:
+      mode: 0755
+  - src: csw
+    dst: /usr/bin/claude-switch
+    type: symlink
+  - src: ${COMPLETION_DIR}/csw.bash
+    dst: /usr/share/bash-completion/completions/csw
+    file_info:
+      mode: 0644
+  - src: ${COMPLETION_DIR}/_csw
+    dst: /usr/share/zsh/site-functions/_csw
+    file_info:
+      mode: 0644
+  - src: LICENSE
+    dst: /usr/share/doc/csw/LICENSE
+    type: license

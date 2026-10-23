@@ -76,8 +76,47 @@ jobs:
         with:
           subject-path: zig-out/bin/${{ matrix.asset }}
 
-  checksums:
+  packages:
     needs: [release-please, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Linux binaries
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir bin
+          gh release download ${{ needs.release-please.outputs.tag_name }} \
+            --repo ${{ github.repository }} \
+            --pattern 'csw-*-unknown-linux-musl' \
+            --dir bin
+          chmod +x bin/*
+
+      - name: Build deb and rpm packages
+        run: |
+          tag="${{ needs.release-please.outputs.tag_name }}"
+          packaging/build-packages.sh "${tag#v}" bin dist
+
+      - name: Upload packages to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload ${{ needs.release-please.outputs.tag_name }} \
+            dist/* \
+            --repo ${{ github.repository }}
+
+      - name: Attest packages
+        uses: actions/attest-build-provenance@v2.4.0
+        with:
+          subject-path: dist/*
+
+  checksums:
+    needs: [release-please, build, packages]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -92,9 +131,10 @@ jobs:
           gh release download ${{ needs.release-please.outputs.tag_name }} \
             --repo ${{ github.repository }} \
             --pattern 'csw-*' \
+            --pattern 'csw_*' \
             --dir assets
           cd assets
-          sha256sum csw-* > SHA256SUMS
+          sha256sum csw-* csw_* > SHA256SUMS
           cat SHA256SUMS
 
       - name: Upload SHA256SUMS to release
@@ -110,3 +150,52 @@ jobs:
         uses: actions/attest-build-provenance@v2.4.0
         with:
           subject-path: assets/SHA256SUMS
+
+  publish-packages:
+    needs: [release-please, checksums]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+    steps:
+      - name: Check the tap token
+        id: tap
+        run: |
+          if [ -n "$HOMEBREW_TAP_TOKEN" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::HOMEBREW_TAP_TOKEN is not set, skipping the Homebrew tap update"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.tap.outputs.enabled == 'true'
+
+      - name: Render the formula
+        if: steps.tap.outputs.enabled == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="${{ needs.release-please.outputs.tag_name }}"
+          gh release download "$tag" --repo ${{ github.repository }} --pattern SHA256SUMS --dir .
+          packaging/render.sh homebrew "${tag#v}" SHA256SUMS > csw.rb
+
+      - name: Push the formula to the tap
+        if: steps.tap.outputs.enabled == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          gh auth setup-git
+          gh repo clone mtxr/homebrew-tap tap
+          mkdir -p tap/Formula
+          cp csw.rb tap/Formula/csw.rb
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/csw.rb
+          if git diff --cached --quiet; then
+            echo "Formula already up to date"
+          else
+            git commit -m "csw ${{ needs.release-please.outputs.tag_name }}"
+            git push
+          fi

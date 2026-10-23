@@ -1,0 +1,119 @@
+name: Distros
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build static Linux binaries
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Zig 0.17.0
+        uses: mlugg/setup-zig@v2
+        with:
+          version: "0.17.0"
+
+      - name: Build x86_64 and aarch64 musl binaries
+        run: |
+          mkdir bin
+          for pair in x86_64:x86_64-linux-musl aarch64:aarch64-linux-musl; do
+            arch="${pair%%:*}"
+            target="${pair#*:}"
+            zig build -Doptimize=ReleaseSmall -Dtarget="$target" --prefix "zig-out-$arch"
+            cp "zig-out-$arch/bin/csw" "bin/csw-$arch-unknown-linux-musl"
+          done
+
+      - name: Check completion scripts in real shells
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq zsh
+          bin/csw-x86_64-unknown-linux-musl completion bash > csw.bash
+          bin/csw-x86_64-unknown-linux-musl completion zsh > _csw
+          bash -n csw.bash
+          zsh -n _csw
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-binaries
+          path: bin/
+          if-no-files-found: error
+
+  smoke:
+    name: Smoke test (${{ matrix.image }})
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          - alpine:latest
+          - debian:stable
+          - ubuntu:24.04
+          - fedora:latest
+          - archlinux:latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-binaries
+          path: bin
+
+      - name: Run the smoke test in ${{ matrix.image }}
+        run: |
+          chmod +x bin/*
+          docker run --rm -v "$PWD:/work:ro" -w /work ${{ matrix.image }} \
+            sh packaging/smoke.sh /work/bin/csw-x86_64-unknown-linux-musl
+
+  packages:
+    name: Install and remove packages
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-binaries
+          path: bin
+
+      - name: Build deb and rpm packages
+        run: |
+          chmod +x bin/*
+          packaging/build-packages.sh 0.0.0 bin dist
+          ls -l dist
+
+      - name: Install, run and remove the deb on Debian
+        run: |
+          docker run --rm -v "$PWD/dist:/dist:ro" debian:stable sh -ec '
+            apt-get update -qq
+            apt-get install -y -qq /dist/csw_0.0.0_amd64.deb
+            csw --version
+            test -L /usr/bin/claude-switch
+            test -s /usr/share/bash-completion/completions/csw
+            test -s /usr/share/zsh/site-functions/_csw
+            apt-get remove -y -qq csw
+            ! command -v csw
+            test ! -e /usr/share/zsh/site-functions/_csw
+          '
+
+      - name: Install, run and remove the rpm on Fedora
+        run: |
+          docker run --rm -v "$PWD/dist:/dist:ro" fedora:latest sh -ec '
+            dnf install -y -q /dist/csw-0.0.0-1.x86_64.rpm
+            csw --version
+            test -L /usr/bin/claude-switch
+            test -s /usr/share/bash-completion/completions/csw
+            test -s /usr/share/zsh/site-functions/_csw
+            rpm -e csw
+            ! command -v csw
+            test ! -e /usr/share/zsh/site-functions/_csw
+          '

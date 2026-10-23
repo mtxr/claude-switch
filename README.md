@@ -29,6 +29,23 @@ cp zig-out/bin/csw ~/.local/bin/csw
 
 Grab the binary for your platform from [Releases](https://github.com/mtxr/claude-switch/releases), put it somewhere in your `$PATH`, and `chmod +x` it.
 
+### Option 4 — package managers
+
+These channels become available once the first release that ships them is published.
+
+| Channel | Command |
+|---|---|
+| Homebrew (macOS and Linux) | `brew install mtxr/tap/csw` |
+| mise (macOS and Linux) | `mise use -g github:mtxr/claude-switch` |
+| Nix (macOS and Linux) | `nix run github:mtxr/claude-switch` or `nix profile install github:mtxr/claude-switch` |
+| Debian, Ubuntu | `sudo apt install ./csw_<version>_<amd64\|arm64>.deb` from [Releases](https://github.com/mtxr/claude-switch/releases) |
+| Fedora, RHEL | `sudo dnf install ./csw-<version>-1.<x86_64\|aarch64>.rpm` from Releases |
+| Arch (AUR) | `claude-switch-bin` |
+
+The Linux binaries are static, so they run on any distribution. The packages also install the `claude-switch` alias and bash and zsh completions.
+
+Windows is not supported natively. Under WSL, use any of the Linux options above.
+
 ### Verifying a download
 
 Every release ships a `SHA256SUMS` file, and each binary and `SHA256SUMS` carry a GitHub build provenance attestation. `install.sh` checks the checksum before installing and refuses to install on a mismatch. To verify a manual download:
