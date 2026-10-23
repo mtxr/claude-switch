@@ -10,6 +10,7 @@ const run = @import("run.zig");
 
 pub const BINDING_FILE = ".csw";
 pub const BOUND_VAR = "__CSW_BOUND";
+pub const WARNED_VAR = "__CSW_WARNED";
 const CONFIG_VAR = "CLAUDE_CONFIG_DIR";
 const MAX_NAME_LEN = 64;
 const MAX_FILE_BYTES = 256;
@@ -77,9 +78,23 @@ pub fn cmdEnvFromCwd(gpa: std.mem.Allocator, io: std.Io) !void {
             if (run.profileNameOfDir(dir)) |name| run.reportCredentials(gpa, io, h, dir, name, .hook) catch {};
         }
     }
+    const missing = try missingBindingIn(gpa, h, cwd);
+    defer if (missing) |m| m.deinit(gpa);
+    const key = if (missing) |m| try warnKey(gpa, m) else null;
+    defer if (key) |k| gpa.free(k);
+    const action = decideWarning(key, envVar(WARNED_VAR), bound, current);
+    if (action == .warn) {
+        const fallback = if (target) |t| run.profileNameOfDir(t) else null;
+        const message = try warningMessage(gpa, missing.?, fallback);
+        defer gpa.free(message);
+        display.warnErr(message);
+    }
+
     const script = try renderEnv(gpa, target, bound, current);
     defer gpa.free(script);
-    display.print("{s}", .{script});
+    const warned_script = try renderWarned(gpa, action, key);
+    defer gpa.free(warned_script);
+    display.print("{s}{s}", .{ script, warned_script });
 }
 
 pub fn cmdHook(gpa: std.mem.Allocator, shell_name: []const u8) !void {
@@ -191,12 +206,80 @@ pub fn unbindIn(gpa: std.mem.Allocator, dir: []const u8) !bool {
     return std.c.unlink(file_z) == 0;
 }
 
-pub fn findBindingIn(gpa: std.mem.Allocator, start: []const u8) !?[]u8 {
+pub const Binding = struct {
+    dir: []u8,
+    name: []u8,
+
+    pub fn deinit(self: Binding, gpa: std.mem.Allocator) void {
+        gpa.free(self.dir);
+        gpa.free(self.name);
+    }
+};
+
+/// Nearest valid `.csw` walking up from `start`, with the directory that holds it.
+pub fn findBindingAtIn(gpa: std.mem.Allocator, start: []const u8) !?Binding {
     var dir: ?[]const u8 = start;
     while (dir) |d| : (dir = std.fs.path.dirname(d)) {
-        if (try readBindingIn(gpa, d)) |name| return name;
+        if (try readBindingIn(gpa, d)) |name| {
+            errdefer gpa.free(name);
+            return .{ .dir = try gpa.dupe(u8, d), .name = name };
+        }
     }
     return null;
+}
+
+pub fn findBindingIn(gpa: std.mem.Allocator, start: []const u8) !?[]u8 {
+    const binding = (try findBindingAtIn(gpa, start)) orelse return null;
+    gpa.free(binding.dir);
+    return binding.name;
+}
+
+/// The nearest `.csw` when it names a profile that does not exist.
+pub fn missingBindingIn(gpa: std.mem.Allocator, base: []const u8, start: []const u8) !?Binding {
+    const binding = (try findBindingAtIn(gpa, start)) orelse return null;
+    if (profileExistsIn(gpa, base, binding.name)) {
+        binding.deinit(gpa);
+        return null;
+    }
+    return binding;
+}
+
+pub const WarnAction = enum { none, warn, clear };
+
+pub fn warnKey(gpa: std.mem.Allocator, binding: Binding) ![]u8 {
+    return std.fmt.allocPrint(gpa, "{s}|{s}", .{ binding.dir, binding.name });
+}
+
+/// Decides whether the hook should warn about a dangling `.csw` now. The key of
+/// the last warning lives in the shell, so each (directory, name) warns once.
+/// A CLAUDE_CONFIG_DIR set by hand silences the hook entirely.
+pub fn decideWarning(key: ?[]const u8, warned: ?[]const u8, bound: ?[]const u8, current: ?[]const u8) WarnAction {
+    const user_owned = current != null and !isHookOwned(bound, current);
+    if (user_owned) return .none;
+    if (key) |k| {
+        const already = warned != null and std.mem.eql(u8, warned.?, k);
+        return if (already) .none else .warn;
+    }
+    return if (warned != null) .clear else .none;
+}
+
+pub fn renderWarned(gpa: std.mem.Allocator, action: WarnAction, key: ?[]const u8) ![]u8 {
+    switch (action) {
+        .none => return gpa.dupe(u8, ""),
+        .clear => return std.fmt.allocPrint(gpa, "unset {s}\n", .{WARNED_VAR}),
+        .warn => {
+            const quoted = try shellQuote(gpa, key.?);
+            defer gpa.free(quoted);
+            return std.fmt.allocPrint(gpa, "export {s}={s}\n", .{ WARNED_VAR, quoted });
+        },
+    }
+}
+
+pub fn warningMessage(gpa: std.mem.Allocator, binding: Binding, fallback: ?[]const u8) ![]u8 {
+    if (fallback) |name| {
+        return std.fmt.allocPrint(gpa, "{s} in {s} names profile '{s}', which does not exist; using '{s}'", .{ BINDING_FILE, binding.dir, binding.name, name });
+    }
+    return std.fmt.allocPrint(gpa, "{s} in {s} names profile '{s}', which does not exist; no profile is active", .{ BINDING_FILE, binding.dir, binding.name });
 }
 
 pub fn resolveHookTargetIn(gpa: std.mem.Allocator, base: []const u8, start: []const u8) !?[]const u8 {
@@ -214,7 +297,7 @@ pub fn resolveTargetIn(gpa: std.mem.Allocator, base: []const u8, start: []const 
     return try paths.profileDirIn(gpa, base, name);
 }
 
-fn profileExistsIn(gpa: std.mem.Allocator, base: []const u8, name: []const u8) bool {
+pub fn profileExistsIn(gpa: std.mem.Allocator, base: []const u8, name: []const u8) bool {
     const p_json = paths.profileJsonIn(gpa, base, name) catch return false;
     defer gpa.free(p_json);
     return desktop.pathExists(gpa, p_json);
@@ -249,13 +332,13 @@ fn writeFile(gpa: std.mem.Allocator, path: []const u8, content: []const u8) !voi
     if (n != content.len) return error.WriteFailed;
 }
 
-fn currentDir(gpa: std.mem.Allocator) ![]u8 {
+pub fn currentDir(gpa: std.mem.Allocator) ![]u8 {
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const cwd = std.c.getcwd(&buf, buf.len) orelse return error.CwdUnavailable;
     return gpa.dupe(u8, std.mem.sliceTo(cwd, 0));
 }
 
-fn envVar(name: [*:0]const u8) ?[]const u8 {
+pub fn envVar(name: [*:0]const u8) ?[]const u8 {
     const val = std.c.getenv(name) orelse return null;
     return std.mem.sliceTo(val, 0);
 }
@@ -268,6 +351,79 @@ fn tmpBase(alloc: std.mem.Allocator, tmp: *std.testing.TmpDir) ![]u8 {
 
 fn touch(alloc: std.mem.Allocator, path: []const u8) !void {
     try writeFile(alloc, path, "{}");
+}
+
+test "decideWarning warns once per key and clears when no longer dangling" {
+    try std.testing.expectEqual(WarnAction.warn, decideWarning("d|x", null, null, null));
+    try std.testing.expectEqual(WarnAction.warn, decideWarning("d|y", "d|x", null, null));
+    try std.testing.expectEqual(WarnAction.none, decideWarning("d|x", "d|x", null, null));
+    try std.testing.expectEqual(WarnAction.clear, decideWarning(null, "d|x", null, null));
+    try std.testing.expectEqual(WarnAction.none, decideWarning(null, null, null, null));
+}
+
+test "decideWarning stays silent for a CLAUDE_CONFIG_DIR set by hand" {
+    try std.testing.expectEqual(WarnAction.none, decideWarning("d|x", null, null, "/manual"));
+    try std.testing.expectEqual(WarnAction.none, decideWarning("d|x", null, "/h/.claude.a", "/manual"));
+    try std.testing.expectEqual(WarnAction.warn, decideWarning("d|x", null, "/h/.claude.a", "/h/.claude.a"));
+}
+
+test "renderWarned exports the key, unsets it or stays empty" {
+    const alloc = std.testing.allocator;
+    const none = try renderWarned(alloc, .none, null);
+    defer alloc.free(none);
+    try std.testing.expectEqualStrings("", none);
+    const clear = try renderWarned(alloc, .clear, null);
+    defer alloc.free(clear);
+    try std.testing.expectEqualStrings("unset __CSW_WARNED\n", clear);
+    const warn = try renderWarned(alloc, .warn, "/p'q|x");
+    defer alloc.free(warn);
+    try std.testing.expectEqualStrings("export __CSW_WARNED='/p'\\''q|x'\n", warn);
+}
+
+test "warningMessage names the fallback or the lack of one" {
+    const alloc = std.testing.allocator;
+    var dir = [_]u8{ '/', 'p' };
+    var name = [_]u8{'x'};
+    const binding: Binding = .{ .dir = &dir, .name = &name };
+    const with = try warningMessage(alloc, binding, "work");
+    defer alloc.free(with);
+    try std.testing.expectEqualStrings(".csw in /p names profile 'x', which does not exist; using 'work'", with);
+    const without = try warningMessage(alloc, binding, null);
+    defer alloc.free(without);
+    try std.testing.expectEqualStrings(".csw in /p names profile 'x', which does not exist; no profile is active", without);
+}
+
+test "warnKey joins directory and name" {
+    const alloc = std.testing.allocator;
+    var dir = [_]u8{ '/', 'p' };
+    var name = [_]u8{'x'};
+    const key = try warnKey(alloc, .{ .dir = &dir, .name = &name });
+    defer alloc.free(key);
+    try std.testing.expectEqualStrings("/p|x", key);
+}
+
+test "missingBindingIn reports only a dangling nearest binding" {
+    const alloc = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const base = try tmpBase(alloc, &tmp);
+    defer alloc.free(base);
+    const proj = try std.fs.path.join(alloc, &.{ base, "proj" });
+    defer alloc.free(proj);
+    try desktop.mkdirAllC(alloc, proj);
+
+    const file = try bindingPathIn(alloc, proj);
+    defer alloc.free(file);
+    try writeFile(alloc, file, "ghost\n");
+    const missing = (try missingBindingIn(alloc, base, proj)).?;
+    defer missing.deinit(alloc);
+    try std.testing.expectEqualStrings("ghost", missing.name);
+    try std.testing.expectEqualStrings(proj, missing.dir);
+
+    const pj = try paths.profileJsonIn(alloc, base, "ghost");
+    defer alloc.free(pj);
+    try touch(alloc, pj);
+    try std.testing.expect(try missingBindingIn(alloc, base, proj) == null);
 }
 
 test "isValidName accepts and rejects" {

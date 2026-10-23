@@ -156,7 +156,7 @@ cd ~/work/project && csw bind work          # writes .csw containing "work"
 eval "$(csw hook zsh)"                      # add to ~/.zshrc (bash: eval "$(csw hook bash)" in ~/.bashrc)
 ```
 
-On every prompt the hook finds the nearest `.csw` walking up from `$PWD` and exports `CLAUDE_CONFIG_DIR=~/.claude.<name>`. Leaving the tree unsets only what the hook set; a `CLAUDE_CONFIG_DIR` you exported yourself is never touched. Only existing profiles with names matching `[A-Za-z0-9._-]` are honored, so an untrusted repo cannot inject shell through `.csw`.
+On every prompt the hook finds the nearest `.csw` walking up from `$PWD` and exports `CLAUDE_CONFIG_DIR=~/.claude.<name>`. Leaving the tree unsets only what the hook set; a `CLAUDE_CONFIG_DIR` you exported yourself is never touched. Only existing profiles with names matching `[A-Za-z0-9._-]` are honored, so an untrusted repo cannot inject shell through `.csw`. A `.csw` that names a profile that does not exist falls back to the active profile and prints one warning on stderr (again only if the directory or name changes).
 
 ## Completions
 
@@ -218,7 +218,7 @@ What each command does for Desktop:
 | `csw pick --desktop` | `use --desktop` for the chosen profile. |
 | `csw logout-all --desktop` | Quits Desktop and removes the legacy Desktop symlink. |
 
-`csw whoami` and `csw doctor` are read-only and always report both products, including which profile owns the Desktop data dir (and warn when it is unassigned or points at a deleted profile).
+`csw whoami` and `csw doctor` are read-only and always report both products, including which profile owns the Desktop data dir (and warn when it is unassigned or points at a deleted profile). `csw doctor` also checks profile files and stored logins, leftover legacy Keychain entries, `CLAUDE_CONFIG_DIR`, the `.csw` that applies to the current directory and whether the shell hook is loaded; these extra findings are warnings and never fail the run.
 
 csw records the owner of the main Desktop data dir in `Claude/.csw-profile`; the marker travels with the dir when it is renamed. Installs that predate the marker are assigned to the active Code profile the first time `use` or `new` runs, which matches how older versions always switched both together.
 

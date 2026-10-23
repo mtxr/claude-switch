@@ -33,6 +33,10 @@ pub fn infoErr(msg: []const u8) void {
     printErr("➜   {s}\n", .{msg});
 }
 
+pub fn warnErr(msg: []const u8) void {
+    printErr("⚠️  {s}\n", .{msg});
+}
+
 pub fn ok(msg: []const u8) void {
     printOut("✅  {s}\n", .{msg});
 }
