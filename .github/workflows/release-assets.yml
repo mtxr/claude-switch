@@ -1,0 +1,187 @@
+name: Release assets
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        type: string
+        required: true
+      publish:
+        type: boolean
+        required: true
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - runner: macos-latest
+            asset: csw-aarch64-apple-darwin
+          - runner: macos-15-intel
+            asset: csw-x86_64-apple-darwin
+          - runner: ubuntu-latest
+            asset: csw-x86_64-unknown-linux-musl
+            target: x86_64-linux-musl
+          - runner: ubuntu-latest
+            asset: csw-aarch64-unknown-linux-musl
+            target: aarch64-linux-musl
+    runs-on: ${{ matrix.runner }}
+    env:
+      TAG: ${{ inputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Zig 0.17.0
+        uses: mlugg/setup-zig@v2
+        with:
+          version: "0.17.0"
+
+      - name: Build
+        shell: bash
+        run: |
+          if [ -n "${{ matrix.target }}" ]; then
+            zig build -Doptimize=ReleaseSmall -Dtarget=${{ matrix.target }}
+          else
+            zig build -Doptimize=ReleaseSmall
+            strip zig-out/bin/csw
+          fi
+          cp zig-out/bin/csw "zig-out/bin/${{ matrix.asset }}"
+
+      - name: Upload binary to release
+        if: inputs.publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "$TAG" \
+            "zig-out/bin/${{ matrix.asset }}" \
+            --clobber \
+            --repo ${{ github.repository }}
+
+      - name: Attest build provenance
+        if: inputs.publish
+        uses: actions/attest-build-provenance@v2.4.0
+        with:
+          subject-path: zig-out/bin/${{ matrix.asset }}
+
+      - name: Keep the binary as a workflow artifact
+        if: ${{ !inputs.publish }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: asset-${{ matrix.asset }}
+          path: zig-out/bin/${{ matrix.asset }}
+          retention-days: 3
+          if-no-files-found: error
+
+  packages:
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ inputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Linux binaries from the release
+        if: inputs.publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir bin
+          gh release download "$TAG" \
+            --repo ${{ github.repository }} \
+            --pattern 'csw-*-unknown-linux-musl' \
+            --dir bin
+
+      - name: Download Linux binaries from the workflow
+        if: ${{ !inputs.publish }}
+        uses: actions/download-artifact@v4
+        with:
+          pattern: asset-csw-*-unknown-linux-musl
+          merge-multiple: true
+          path: bin
+
+      - name: Build deb and rpm packages
+        run: |
+          chmod +x bin/*
+          tag="$TAG"
+          packaging/build-packages.sh "${tag#v}" bin dist
+
+      - name: Upload packages to release
+        if: inputs.publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "$TAG" \
+            dist/* \
+            --clobber \
+            --repo ${{ github.repository }}
+
+      - name: Attest packages
+        if: inputs.publish
+        uses: actions/attest-build-provenance@v2.4.0
+        with:
+          subject-path: dist/*
+
+      - name: Keep the packages as a workflow artifact
+        if: ${{ !inputs.publish }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: packages
+          path: dist/*
+          retention-days: 3
+          if-no-files-found: error
+
+  checksums:
+    needs: [build, packages]
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ inputs.tag }}
+    steps:
+      - name: Download assets from the release
+        if: inputs.publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir assets
+          gh release download "$TAG" \
+            --repo ${{ github.repository }} \
+            --pattern 'csw-*' \
+            --pattern 'csw_*' \
+            --dir assets
+
+      - name: Download assets from the workflow
+        if: ${{ !inputs.publish }}
+        uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+          path: assets
+
+      - name: Generate SHA256SUMS
+        run: |
+          cd assets
+          sha256sum csw-* csw_* > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Upload SHA256SUMS to release
+        if: inputs.publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "$TAG" \
+            assets/SHA256SUMS \
+            --repo ${{ github.repository }} \
+            --clobber
+
+      - name: Attest SHA256SUMS
+        if: inputs.publish
+        uses: actions/attest-build-provenance@v2.4.0
+        with:
+          subject-path: assets/SHA256SUMS
+
+      - name: Keep SHA256SUMS as a workflow artifact
+        if: ${{ !inputs.publish }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: SHA256SUMS
+          path: assets/SHA256SUMS
+          retention-days: 3
+          if-no-files-found: error

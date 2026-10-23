@@ -1,0 +1,112 @@
+name: Release finalize
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        type: string
+        required: true
+    secrets:
+      HOMEBREW_TAP_TOKEN:
+        required: false
+
+jobs:
+  publish-release:
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ inputs.tag }}
+    permissions:
+      contents: write
+    outputs:
+      stable: ${{ steps.publish.outputs.stable }}
+    steps:
+      - name: Check the draft is complete
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="$TAG"
+          gh release view "$tag" --repo ${{ github.repository }} --json assets -q '.assets[].name' | sort > names.txt
+          cat names.txt
+          for required in \
+            SHA256SUMS \
+            csw-aarch64-apple-darwin \
+            csw-x86_64-apple-darwin \
+            csw-x86_64-unknown-linux-musl \
+            csw-aarch64-unknown-linux-musl; do
+            grep -qx "$required" names.txt || { echo "::error::missing release asset $required"; exit 1; }
+          done
+          grep -q '\.deb$' names.txt || { echo "::error::missing deb packages"; exit 1; }
+          grep -q '\.rpm$' names.txt || { echo "::error::missing rpm packages"; exit 1; }
+          mkdir sums
+          gh release download "$tag" --repo ${{ github.repository }} --pattern SHA256SUMS --dir sums
+          grep -vx SHA256SUMS names.txt | while read -r name; do
+            awk -v n="$name" '$2 == n { found = 1 } END { exit !found }' sums/SHA256SUMS \
+              || { echo "::error::$name is not listed in SHA256SUMS"; exit 1; }
+          done
+
+      - name: Publish the release
+        id: publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="$TAG"
+          prerelease=$(gh release view "$tag" --repo ${{ github.repository }} --json isPrerelease -q .isPrerelease)
+          if [ "$prerelease" = "true" ]; then
+            gh release edit "$tag" --repo ${{ github.repository }} --draft=false --latest=false
+            echo "stable=false" >> "$GITHUB_OUTPUT"
+          else
+            gh release edit "$tag" --repo ${{ github.repository }} --draft=false --latest
+            echo "stable=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  publish-packages:
+    needs: publish-release
+    if: needs.publish-release.outputs.stable == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      TAG: ${{ inputs.tag }}
+      HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+    steps:
+      - name: Check the tap token
+        id: tap
+        run: |
+          if [ -n "$HOMEBREW_TAP_TOKEN" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::HOMEBREW_TAP_TOKEN is not set, skipping the Homebrew tap update"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.tap.outputs.enabled == 'true'
+
+      - name: Render the formula
+        if: steps.tap.outputs.enabled == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="$TAG"
+          gh release download "$tag" --repo ${{ github.repository }} --pattern SHA256SUMS --dir .
+          packaging/render.sh homebrew "${tag#v}" SHA256SUMS > csw.rb
+
+      - name: Push the formula to the tap
+        if: steps.tap.outputs.enabled == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          gh auth setup-git
+          gh repo clone mtxr/homebrew-tap tap
+          mkdir -p tap/Formula tap/Aliases
+          cp csw.rb tap/Formula/csw.rb
+          ln -sfn ../Formula/csw.rb tap/Aliases/claude-switch
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/csw.rb Aliases/claude-switch
+          if git diff --cached --quiet; then
+            echo "Formula already up to date"
+          else
+            git commit -m "csw $TAG"
+            git push
+          fi
