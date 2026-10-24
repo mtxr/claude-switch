@@ -85,6 +85,28 @@ pub fn managedMessage(gpa: std.mem.Allocator, kind: InstallKind) ![]u8 {
     return std.fmt.allocPrint(gpa, "csw is managed by {s}; update with: {s}", .{ manager, upgradeCommand(kind) });
 }
 
+pub const EDGE_INSTALL_COMMAND = "curl -fsSL https://raw.githubusercontent.com/mtxr/claude-switch/main/install.sh | CSW_CHANNEL=edge bash";
+
+pub fn managedEdgeMessage(gpa: std.mem.Allocator, kind: InstallKind) ![]u8 {
+    const manager = switch (kind) {
+        .standalone => return gpa.dupe(u8, ""),
+        .homebrew => "Homebrew",
+        .nix => "Nix",
+        .system => "a system package",
+    };
+    const alternative = switch (kind) {
+        .standalone => unreachable,
+        .homebrew => "Uninstall it first (brew uninstall csw), then run:",
+        .nix => "`nix run github:mtxr/claude-switch` already follows main. To install the edge binary instead, remove the Nix one first, then run:",
+        .system => "Remove the package first with your package manager, then run:",
+    };
+    return std.fmt.allocPrint(
+        gpa,
+        "The edge channel is only available for standalone installs (install.sh or a downloaded binary).\n  This csw is managed by {s}, so it was left untouched. {s}\n  {s}",
+        .{ manager, alternative, EDGE_INSTALL_COMMAND },
+    );
+}
+
 pub fn updateNotice(gpa: std.mem.Allocator, current: []const u8, latest: []const u8, kind: InstallKind) ![]u8 {
     return std.fmt.allocPrint(gpa, "Update available: v{s} → v{s}  (run: {s})", .{ current, latest, upgradeCommand(kind) });
 }
@@ -292,6 +314,34 @@ test "managedMessage is empty for standalone and explicit otherwise" {
     const system = try managedMessage(alloc, .system);
     defer alloc.free(system);
     try std.testing.expect(std.mem.startsWith(u8, system, "csw is managed by a system package;"));
+}
+
+test "managedEdgeMessage explains the edge channel for every managed install" {
+    const alloc = std.testing.allocator;
+    const standalone = try managedEdgeMessage(alloc, .standalone);
+    defer alloc.free(standalone);
+    try std.testing.expectEqualStrings("", standalone);
+
+    const kinds = [_]InstallKind{ .homebrew, .nix, .system };
+    const managers = [_][]const u8{ "Homebrew", "Nix", "a system package" };
+    for (kinds, managers) |kind, manager| {
+        const msg = try managedEdgeMessage(alloc, kind);
+        defer alloc.free(msg);
+        try std.testing.expect(std.mem.indexOf(u8, msg, "only available for standalone installs") != null);
+        try std.testing.expect(std.mem.indexOf(u8, msg, manager) != null);
+        try std.testing.expect(std.mem.indexOf(u8, msg, "left untouched") != null);
+        try std.testing.expect(std.mem.endsWith(u8, msg, EDGE_INSTALL_COMMAND));
+    }
+
+    const brew = try managedEdgeMessage(alloc, .homebrew);
+    defer alloc.free(brew);
+    try std.testing.expect(std.mem.indexOf(u8, brew, "brew uninstall csw") != null);
+    const nix = try managedEdgeMessage(alloc, .nix);
+    defer alloc.free(nix);
+    try std.testing.expect(std.mem.indexOf(u8, nix, "nix run github:mtxr/claude-switch") != null);
+    const system = try managedEdgeMessage(alloc, .system);
+    defer alloc.free(system);
+    try std.testing.expect(std.mem.indexOf(u8, system, "your package manager") != null);
 }
 
 test "updateNotice suggests the command for the install kind" {
