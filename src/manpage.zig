@@ -9,6 +9,7 @@ const FlagDoc = struct { flag: []const u8, text: []const u8 };
 const flag_docs = [_]FlagDoc{
     .{ .flag = "--desktop", .text = "Act on Claude Desktop only. Without a product flag, commands act on Claude Code only." },
     .{ .flag = "--all", .text = "Act on Claude Code and Claude Desktop together." },
+    .{ .flag = "--edge", .text = "Install the latest edge build, the rolling pre-release of the main branch, instead of the latest stable release." },
     .{ .flag = "--verbose", .text = "Print the details of each update step." },
     .{ .flag = "--from-cwd", .text = "Print the shell script the hook evaluates for the current directory instead of exporting one profile." },
 };

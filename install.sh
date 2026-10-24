@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# install.sh — download and install the latest csw binary from GitHub releases
+# install.sh — download and install csw from GitHub releases
+# CSW_CHANNEL=edge installs the rolling edge pre-release instead of the latest stable release
 set -euo pipefail
 
 REPO="mtxr/claude-switch"
@@ -28,32 +29,47 @@ case "$ARCH" in
     ;;
 esac
 
-# Get latest release tag
-echo "➜   Fetching latest release..."
-LATEST=$(curl -s -H "Accept: application/vnd.github+json" \
-  "https://api.github.com/repos/${REPO}/releases/latest" |
-  grep '"tag_name"' | sed 's/.*"v\([^"]*\)".*/\1/')
+CHANNEL="${CSW_CHANNEL:-stable}"
+case "$CHANNEL" in
+  stable)
+    echo "➜   Fetching latest release..."
+    LATEST=$(curl -s -H "Accept: application/vnd.github+json" \
+      "https://api.github.com/repos/${REPO}/releases/latest" |
+      grep '"tag_name"' | sed 's/.*"v\([^"]*\)".*/\1/')
 
-if [ -z "$LATEST" ]; then
-  echo "❌  Could not determine latest release."
-  echo "    Check: https://github.com/${REPO}/releases"
-  exit 1
-fi
+    if [ -z "$LATEST" ]; then
+      echo "❌  Could not determine latest release."
+      echo "    Check: https://github.com/${REPO}/releases"
+      exit 1
+    fi
+    LABEL="v${LATEST}"
+    TAG="v${LATEST}"
+    ;;
+  edge)
+    LABEL="edge"
+    TAG="edge"
+    echo "⚠️   Installing the edge channel: the latest build of main, not a stable release."
+    ;;
+  *)
+    echo "❌  Unknown CSW_CHANNEL '${CHANNEL}'. Use stable or edge."
+    exit 1
+    ;;
+esac
 
 ASSET="${BINARY}-${ARCH}-${TARGET_SUFFIX}"
-BASE_URL="https://github.com/${REPO}/releases/download/v${LATEST}"
+BASE_URL="https://github.com/${REPO}/releases/download/${TAG}"
 
 mkdir -p "$BIN_DIR"
 
 WORK_DIR=$(mktemp -d)
 trap 'rm -rf "$WORK_DIR"' EXIT
 
-echo "➜   Downloading csw v${LATEST} for ${ARCH}..."
+echo "➜   Downloading csw ${LABEL} for ${ARCH}..."
 curl -L --fail -o "${WORK_DIR}/${ASSET}" "${BASE_URL}/${ASSET}"
 
 echo "➜   Verifying checksum..."
 if ! curl -L --fail -s -o "${WORK_DIR}/SHA256SUMS" "${BASE_URL}/SHA256SUMS"; then
-  echo "❌  Could not download SHA256SUMS for v${LATEST}. Refusing to install an unverified binary."
+  echo "❌  Could not download SHA256SUMS for ${LABEL}. Refusing to install an unverified binary."
   exit 1
 fi
 
@@ -92,7 +108,7 @@ if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
   echo ""
 fi
 
-echo "✅  csw v${LATEST} installed to ${BIN_DIR}/${BINARY}"
+echo "✅  csw ${LABEL} installed to ${BIN_DIR}/${BINARY}"
 echo "    Alias: ${BIN_DIR}/${ALIAS}"
 echo "    Checksum verified. To verify build provenance: gh attestation verify ${BIN_DIR}/${BINARY} --repo ${REPO}"
 echo ""

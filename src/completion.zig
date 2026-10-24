@@ -327,7 +327,7 @@ test "zsh script offers flags, profiles and shells where they apply" {
     try expectContains(script, "    use)\n      if [[ $cur == -* ]]; then\n        compadd -- --desktop --all\n      elif (( n == 0 )); then\n");
     try expectContains(script, "command csw _profiles 2>/dev/null");
     try expectContains(script, "    env)\n      if [[ $cur == -* ]]; then\n        compadd -- --from-cwd\n");
-    try expectContains(script, "    update)\n      if [[ $cur == -* ]]; then\n        compadd -- --verbose\n      fi\n");
+    try expectContains(script, "    update)\n      if [[ $cur == -* ]]; then\n        compadd -- --edge --verbose\n      fi\n");
     try expectContains(script, "    hook)\n      if (( n == 0 )); then\n        compadd zsh bash fish\n");
     try expectContains(script, "    completion)\n      if (( n == 0 )); then\n        compadd zsh bash fish\n");
     try expectContains(script, "    run)\n      if (( n == 0 )); then\n");
@@ -360,7 +360,7 @@ test "bash script offers flags, profiles and shells where they apply" {
     try expectContains(script, "$(command csw _profiles 2>/dev/null)");
     try expectContains(script, "    env)\n      if [[ $cur == -* ]]; then\n        COMPREPLY=($(compgen -W \"--from-cwd\"");
     try expectContains(script, "    hook)\n      if (( n == 0 )); then\n        COMPREPLY=($(compgen -W \"zsh bash fish\"");
-    try expectContains(script, "    update)\n      if [[ $cur == -* ]]; then\n        COMPREPLY=($(compgen -W \"--verbose\"");
+    try expectContains(script, "    update)\n      if [[ $cur == -* ]]; then\n        COMPREPLY=($(compgen -W \"--edge --verbose\"");
     try std.testing.expect(std.mem.indexOf(u8, script, "    whoami)") == null);
 }
 
@@ -397,6 +397,7 @@ test "fish script offers flags per command, profiles and shells" {
     try expectContains(script, "complete -c csw -n '__csw_command_is use' -l desktop\n");
     try expectContains(script, "complete -c csw -n '__csw_command_is use' -l all\n");
     try expectContains(script, "complete -c csw -n '__csw_command_is env' -l from-cwd\n");
+    try expectContains(script, "complete -c csw -n '__csw_command_is update' -l edge\n");
     try expectContains(script, "complete -c csw -n '__csw_command_is update' -l verbose\n");
     try expectContains(script, "-a '(command csw _profiles 2>/dev/null)'\n");
     try expectContains(script, "complete -c csw -n '__csw_command_is hook completion; and __csw_at_first_arg' -a 'zsh bash fish'\n");

@@ -46,6 +46,15 @@ The Linux binaries are static, so they run on any distribution. The packages als
 
 Windows is not supported natively. Under WSL, use any of the Linux options above.
 
+### Edge channel
+
+`edge` is a rolling pre-release rebuilt from `main` whenever the code changes. It is unstable and meant for trying changes early; the release notes on the [edge release](https://github.com/mtxr/claude-switch/releases/tag/edge) list what changed since the last stable version.
+
+- Install it with `CSW_CHANNEL=edge` set for `install.sh`.
+- Switch an existing install with `csw update --edge`. Repeat it to follow new edge builds. `csw --version` shows `<version>-edge+<commit>`.
+- Edge downloads are verified against the release `SHA256SUMS` like stable ones.
+- To leave edge, wait for the next stable release and run `csw update`, or reinstall stable with the plain install script. Package-manager installs always follow stable.
+
 ### Verifying a download
 
 Every release ships a `SHA256SUMS` file, and each binary and `SHA256SUMS` carry a GitHub build provenance attestation. `install.sh` checks the checksum before installing and refuses to install on a mismatch. To verify a manual download:
@@ -123,7 +132,7 @@ csw delete [name]    Delete a profile
 csw list             List all saved profiles
 csw whoami           Show active session info
 csw pick             Interactive profile picker (sk, fzf or built-in)
-csw update [--verbose]  Update csw to the latest release
+csw update [--edge] [--verbose]  Update csw to the latest release (--edge: latest edge build)
 csw logout-all       Log out and remove all active symlinks
 csw run [name] [-- args]  Run claude with a profile in this terminal only
 csw login [name]     Start claude for a profile and log in once
@@ -176,7 +185,7 @@ csw records which profile owns the main Desktop data dir (`~/Library/Application
 - **`whoami`** — Shows the active Claude Code session, the Desktop owner and session, and saved profiles with email, plan and token expiry.
 - **`pick`** — `use` through the picker.
 - **`logout-all`** — Removes the live Claude Code login and the `~/.claude.json` / `~/.claude/` symlinks. Profile files and their stored logins are kept.
-- **`update [--verbose]`** — Downloads the latest release binary from GitHub, checks it against the release `SHA256SUMS` and replaces the current one atomically. It refuses, leaving the installed binary untouched, when the checksums are missing, do not list the asset or do not match. When csw was installed by Homebrew, Nix or a system package it does not replace itself and prints the package manager command instead.
+- **`update [--edge] [--verbose]`** — Downloads the latest release binary from GitHub, checks it against the release `SHA256SUMS` and replaces the current one atomically. It refuses, leaving the installed binary untouched, when the checksums are missing, do not list the asset or do not match. When csw was installed by Homebrew, Nix or a system package it does not replace itself and prints the package manager command instead. With `--edge` it installs the latest edge build instead (see [Edge channel](#edge-channel)).
 - **`doctor`** — See [Doctor](#doctor).
 
 ## Concurrent profiles
