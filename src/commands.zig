@@ -27,7 +27,7 @@ pub const all = [_]Command{
     .{ .name = "list", .usage = "list", .summary = "List all saved profiles", .flags = product_flags },
     .{ .name = "whoami", .usage = "whoami", .summary = "Show active session info" },
     .{ .name = "pick", .usage = "pick", .summary = "Interactive profile picker (sk, fzf or built-in)", .flags = product_flags },
-    .{ .name = "update", .usage = "update [--verbose]", .summary = "Update csw to the latest release", .flags = &.{"--verbose"}, .skips_update_check = true },
+    .{ .name = "update", .usage = "update [--edge] [--verbose]", .summary = "Update csw to the latest release (--edge: latest edge build)", .flags = &.{ "--edge", "--verbose" }, .skips_update_check = true },
     .{ .name = "logout-all", .usage = "logout-all", .summary = "Log out and remove all active symlinks", .flags = product_flags },
     .{ .name = "run", .usage = "run [name] [-- args]", .summary = "Run claude with a profile in this terminal only", .arg = .profile, .picks_name = true },
     .{ .name = "login", .usage = "login [name]", .summary = "Start claude for a profile and log in once", .arg = .profile, .picks_name = true },
@@ -116,6 +116,6 @@ test "help lines keep the historical alignment" {
     defer alloc.free(lines);
     try std.testing.expect(std.mem.indexOf(u8, lines, "  save [name]      Save the current Claude Code session as a named profile\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, lines, "  whoami           Show active session info\n") != null);
-    try std.testing.expect(std.mem.indexOf(u8, lines, "  update [--verbose]  Update csw to the latest release\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, lines, "  update [--edge] [--verbose]  Update csw to the latest release (--edge: latest edge build)\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, lines, "  run [name] [-- args]  Run claude with a profile in this terminal only\n") != null);
 }

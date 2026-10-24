@@ -1,11 +1,14 @@
 //! update.zig — checksum-verified, atomic self-update and install-kind detection
 
 const std = @import("std");
+const channel = @import("channel.zig");
 
 const Sha256 = std.crypto.hash.sha2.Sha256;
 const MAX_SUMS_BYTES = 64 * 1024;
 const TMP_BINARY_SUFFIX = "_update_tmp";
 const TMP_SUMS_SUFFIX = "_update_sums";
+const TMP_COMMIT_SUFFIX = "_update_commit";
+const TMP_EDGE_SUMS_SUFFIX = "_update_edge_sums";
 
 pub const InstallKind = enum { standalone, homebrew, nix, system };
 
@@ -22,6 +25,15 @@ pub const UpdateError = error{
     ChecksumMissing,
     ChecksumMismatch,
     ReplaceFailed,
+    EdgeCommitUnavailable,
+    EdgeCommitInvalid,
+};
+
+pub const EdgeStatus = enum { current, updated };
+
+pub const EdgeResult = struct {
+    status: EdgeStatus,
+    commit: [channel.EDGE_COMMIT_LEN]u8,
 };
 
 pub fn detectInstall(exe_path: []const u8) InstallKind {
@@ -200,6 +212,43 @@ pub fn applyUpdate(gpa: std.mem.Allocator, io: std.Io, transport: Transport, exe
     if (std.c.rename(tmp_binary_z, exe_path_z) != 0) return UpdateError.ReplaceFailed;
 }
 
+/// Reads the EDGE_COMMIT asset, authenticated against the release SHA256SUMS,
+/// and applies the edge binary unless `embedded` already is that commit.
+pub fn applyEdgeUpdate(gpa: std.mem.Allocator, io: std.Io, transport: Transport, exe_path: []const u8, base_url: []const u8, asset: []const u8, embedded: []const u8) !EdgeResult {
+    const tmp_commit = try std.fmt.allocPrint(gpa, "{s}" ++ TMP_COMMIT_SUFFIX, .{exe_path});
+    defer gpa.free(tmp_commit);
+    const tmp_sums = try std.fmt.allocPrint(gpa, "{s}" ++ TMP_EDGE_SUMS_SUFFIX, .{exe_path});
+    defer gpa.free(tmp_sums);
+    defer removeFile(gpa, tmp_commit);
+    defer removeFile(gpa, tmp_sums);
+
+    const commit_url = try std.fmt.allocPrint(gpa, "{s}/" ++ channel.EDGE_COMMIT_ASSET, .{base_url});
+    defer gpa.free(commit_url);
+    const sums_url = try std.fmt.allocPrint(gpa, "{s}/SHA256SUMS", .{base_url});
+    defer gpa.free(sums_url);
+
+    transport.download(transport.ctx, gpa, io, commit_url, tmp_commit) catch return UpdateError.EdgeCommitUnavailable;
+    transport.download(transport.ctx, gpa, io, sums_url, tmp_sums) catch return UpdateError.ChecksumsUnavailable;
+
+    const sums = readSmallFile(gpa, tmp_sums) catch return UpdateError.ChecksumsUnavailable;
+    defer gpa.free(sums);
+    const expected = expectedDigest(sums, channel.EDGE_COMMIT_ASSET) orelse return UpdateError.ChecksumMissing;
+    const actual = fileDigestHex(tmp_commit) catch return UpdateError.EdgeCommitUnavailable;
+    if (!digestMatches(expected, &actual)) return UpdateError.ChecksumMismatch;
+
+    const content = readSmallFile(gpa, tmp_commit) catch return UpdateError.EdgeCommitUnavailable;
+    defer gpa.free(content);
+    const commit = channel.parseEdgeCommit(content) orelse return UpdateError.EdgeCommitInvalid;
+
+    var result: EdgeResult = .{ .status = .current, .commit = undefined };
+    _ = std.ascii.lowerString(&result.commit, commit);
+    if (channel.sameCommit(embedded, commit)) return result;
+
+    try applyUpdate(gpa, io, transport, exe_path, base_url, asset);
+    result.status = .updated;
+    return result;
+}
+
 test "detectInstall recognises Homebrew, Nix and system paths" {
     try std.testing.expectEqual(InstallKind.homebrew, detectInstall("/opt/homebrew/bin/csw"));
     try std.testing.expectEqual(InstallKind.homebrew, detectInstall("/opt/homebrew/Cellar/csw/1.0.0/bin/csw"));
@@ -317,7 +366,7 @@ const Fixture = struct {
     }
 
     fn leftovers(self: Fixture, alloc: std.mem.Allocator) !bool {
-        for ([_][]const u8{ TMP_BINARY_SUFFIX, TMP_SUMS_SUFFIX }) |suffix| {
+        for ([_][]const u8{ TMP_BINARY_SUFFIX, TMP_SUMS_SUFFIX, TMP_COMMIT_SUFFIX, TMP_EDGE_SUMS_SUFFIX }) |suffix| {
             const path = try std.fmt.allocPrint(alloc, "{s}{s}", .{ self.exe, suffix });
             defer alloc.free(path);
             const path_z = try alloc.dupeSentinel(u8, path, 0);
@@ -341,12 +390,22 @@ const FakeRelease = struct {
     alloc: std.mem.Allocator,
     binary: ?[]const u8,
     sums: ?[]const u8,
+    commit: ?[]const u8 = null,
+    silent_commit: bool = false,
+    silent_sums: bool = false,
 
     fn download(ctx: ?*anyopaque, gpa: std.mem.Allocator, io: std.Io, url: []const u8, dest: []const u8) anyerror!void {
         _ = gpa;
         _ = io;
         const self: *FakeRelease = @ptrCast(@alignCast(ctx.?));
-        const content = if (std.mem.endsWith(u8, url, "/SHA256SUMS")) self.sums else self.binary;
+        if (self.silent_commit and std.mem.endsWith(u8, url, "/" ++ channel.EDGE_COMMIT_ASSET)) return;
+        if (self.silent_sums and std.mem.endsWith(u8, url, "/SHA256SUMS")) return;
+        const content = if (std.mem.endsWith(u8, url, "/SHA256SUMS"))
+            self.sums
+        else if (std.mem.endsWith(u8, url, "/" ++ channel.EDGE_COMMIT_ASSET))
+            self.commit
+        else
+            self.binary;
         return writeFile(self.alloc, dest, content orelse return error.DownloadFailed);
     }
 
@@ -507,4 +566,152 @@ test "resolveExecutable follows symlinks and falls back to the input" {
 
     var tiny: [2]u8 = undefined;
     try std.testing.expectEqualStrings(link, resolveExecutable(&tiny, link));
+}
+
+const edge_sha = "abcdef0123456789abcdef0123456789abcdef01";
+const older_sha = "1111111111111111111111111111111111111111";
+
+fn edgeSums(alloc: std.mem.Allocator, binary: []const u8, commit: []const u8) ![]u8 {
+    const binary_line = try sumsFor(alloc, binary, "csw-asset");
+    defer alloc.free(binary_line);
+    const commit_line = try sumsFor(alloc, commit, channel.EDGE_COMMIT_ASSET);
+    defer alloc.free(commit_line);
+    return std.fmt.allocPrint(alloc, "{s}{s}", .{ binary_line, commit_line });
+}
+
+test "applyEdgeUpdate installs a newer edge build and reports its commit" {
+    const alloc = std.testing.allocator;
+    var tio = testIo();
+    defer tio.deinit();
+    var fx = try Fixture.init(alloc, "old");
+    defer fx.deinit(alloc);
+    const sums = try edgeSums(alloc, "edge-binary", edge_sha ++ "\n");
+    defer alloc.free(sums);
+    var release: FakeRelease = .{ .alloc = alloc, .binary = "edge-binary", .sums = sums, .commit = edge_sha ++ "\n" };
+
+    const result = try applyEdgeUpdate(alloc, tio.io(), release.transport(), fx.exe, "https://example.test/edge", "csw-asset", older_sha);
+    try std.testing.expectEqual(EdgeStatus.updated, result.status);
+    try std.testing.expectEqualStrings(edge_sha, &result.commit);
+    const installed = try fx.installed(alloc);
+    defer alloc.free(installed);
+    try std.testing.expectEqualStrings("edge-binary", installed);
+    try std.testing.expect(!try fx.leftovers(alloc));
+}
+
+test "applyEdgeUpdate lets a stable build switch to edge and lowercases the commit" {
+    const alloc = std.testing.allocator;
+    var tio = testIo();
+    defer tio.deinit();
+    var fx = try Fixture.init(alloc, "stable");
+    defer fx.deinit(alloc);
+    const upper = "ABCDEF0123456789ABCDEF0123456789ABCDEF01\n";
+    const sums = try edgeSums(alloc, "edge-binary", upper);
+    defer alloc.free(sums);
+    var release: FakeRelease = .{ .alloc = alloc, .binary = "edge-binary", .sums = sums, .commit = upper };
+
+    const result = try applyEdgeUpdate(alloc, tio.io(), release.transport(), fx.exe, "https://example.test/edge", "csw-asset", "");
+    try std.testing.expectEqual(EdgeStatus.updated, result.status);
+    try std.testing.expectEqualStrings(edge_sha, &result.commit);
+}
+
+test "applyEdgeUpdate does nothing when already on that commit" {
+    const alloc = std.testing.allocator;
+    var tio = testIo();
+    defer tio.deinit();
+    var fx = try Fixture.init(alloc, "current");
+    defer fx.deinit(alloc);
+    const sums = try edgeSums(alloc, "unused", edge_sha ++ "\n");
+    defer alloc.free(sums);
+    var release: FakeRelease = .{ .alloc = alloc, .binary = null, .sums = sums, .commit = edge_sha ++ "\n" };
+
+    const result = try applyEdgeUpdate(alloc, tio.io(), release.transport(), fx.exe, "https://example.test/edge", "csw-asset", edge_sha);
+    try std.testing.expectEqual(EdgeStatus.current, result.status);
+    try std.testing.expectEqualStrings(edge_sha, &result.commit);
+    const installed = try fx.installed(alloc);
+    defer alloc.free(installed);
+    try std.testing.expectEqualStrings("current", installed);
+    try std.testing.expect(!try fx.leftovers(alloc));
+}
+
+test "applyEdgeUpdate refuses a commit that does not match SHA256SUMS" {
+    const alloc = std.testing.allocator;
+    var tio = testIo();
+    defer tio.deinit();
+    var fx = try Fixture.init(alloc, "old");
+    defer fx.deinit(alloc);
+    const sums = try edgeSums(alloc, "edge-binary", older_sha ++ "\n");
+    defer alloc.free(sums);
+    var release: FakeRelease = .{ .alloc = alloc, .binary = "edge-binary", .sums = sums, .commit = edge_sha ++ "\n" };
+
+    try std.testing.expectError(UpdateError.ChecksumMismatch, applyEdgeUpdate(alloc, tio.io(), release.transport(), fx.exe, "https://example.test/edge", "csw-asset", older_sha));
+    const installed = try fx.installed(alloc);
+    defer alloc.free(installed);
+    try std.testing.expectEqualStrings("old", installed);
+    try std.testing.expect(!try fx.leftovers(alloc));
+}
+
+test "applyEdgeUpdate fails closed when SHA256SUMS does not list EDGE_COMMIT" {
+    const alloc = std.testing.allocator;
+    var tio = testIo();
+    defer tio.deinit();
+    var fx = try Fixture.init(alloc, "old");
+    defer fx.deinit(alloc);
+    const sums = try sumsFor(alloc, "edge-binary", "csw-asset");
+    defer alloc.free(sums);
+    var release: FakeRelease = .{ .alloc = alloc, .binary = "edge-binary", .sums = sums, .commit = edge_sha ++ "\n" };
+
+    try std.testing.expectError(UpdateError.ChecksumMissing, applyEdgeUpdate(alloc, tio.io(), release.transport(), fx.exe, "https://example.test/edge", "csw-asset", ""));
+}
+
+test "applyEdgeUpdate rejects a malformed commit even when it is listed" {
+    const alloc = std.testing.allocator;
+    var tio = testIo();
+    defer tio.deinit();
+    var fx = try Fixture.init(alloc, "old");
+    defer fx.deinit(alloc);
+    const sums = try edgeSums(alloc, "edge-binary", "not-a-sha\n");
+    defer alloc.free(sums);
+    var release: FakeRelease = .{ .alloc = alloc, .binary = "edge-binary", .sums = sums, .commit = "not-a-sha\n" };
+
+    try std.testing.expectError(UpdateError.EdgeCommitInvalid, applyEdgeUpdate(alloc, tio.io(), release.transport(), fx.exe, "https://example.test/edge", "csw-asset", ""));
+}
+
+test "applyEdgeUpdate reports unavailable commit or checksums" {
+    const alloc = std.testing.allocator;
+    var tio = testIo();
+    defer tio.deinit();
+    var fx = try Fixture.init(alloc, "old");
+    defer fx.deinit(alloc);
+    const sums = try edgeSums(alloc, "edge-binary", edge_sha ++ "\n");
+    defer alloc.free(sums);
+
+    var no_commit: FakeRelease = .{ .alloc = alloc, .binary = "edge-binary", .sums = sums, .commit = null };
+    try std.testing.expectError(UpdateError.EdgeCommitUnavailable, applyEdgeUpdate(alloc, tio.io(), no_commit.transport(), fx.exe, "https://example.test/edge", "csw-asset", ""));
+
+    var silent_commit: FakeRelease = .{ .alloc = alloc, .binary = "edge-binary", .sums = sums, .commit = edge_sha ++ "\n", .silent_commit = true };
+    try std.testing.expectError(UpdateError.EdgeCommitUnavailable, applyEdgeUpdate(alloc, tio.io(), silent_commit.transport(), fx.exe, "https://example.test/edge", "csw-asset", ""));
+
+    var no_sums: FakeRelease = .{ .alloc = alloc, .binary = "edge-binary", .sums = null, .commit = edge_sha ++ "\n" };
+    try std.testing.expectError(UpdateError.ChecksumsUnavailable, applyEdgeUpdate(alloc, tio.io(), no_sums.transport(), fx.exe, "https://example.test/edge", "csw-asset", ""));
+
+    var silent_sums: FakeRelease = .{ .alloc = alloc, .binary = "edge-binary", .sums = sums, .commit = edge_sha ++ "\n", .silent_sums = true };
+    try std.testing.expectError(UpdateError.ChecksumsUnavailable, applyEdgeUpdate(alloc, tio.io(), silent_sums.transport(), fx.exe, "https://example.test/edge", "csw-asset", ""));
+    try std.testing.expect(!try fx.leftovers(alloc));
+}
+
+test "applyEdgeUpdate keeps the old binary when the edge binary is tampered" {
+    const alloc = std.testing.allocator;
+    var tio = testIo();
+    defer tio.deinit();
+    var fx = try Fixture.init(alloc, "old");
+    defer fx.deinit(alloc);
+    const sums = try edgeSums(alloc, "edge-binary", edge_sha ++ "\n");
+    defer alloc.free(sums);
+    var release: FakeRelease = .{ .alloc = alloc, .binary = "tampered", .sums = sums, .commit = edge_sha ++ "\n" };
+
+    try std.testing.expectError(UpdateError.ChecksumMismatch, applyEdgeUpdate(alloc, tio.io(), release.transport(), fx.exe, "https://example.test/edge", "csw-asset", ""));
+    const installed = try fx.installed(alloc);
+    defer alloc.free(installed);
+    try std.testing.expectEqualStrings("old", installed);
+    try std.testing.expect(!try fx.leftovers(alloc));
 }

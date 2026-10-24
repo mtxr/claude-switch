@@ -3,6 +3,7 @@
 const std = @import("std");
 const display = @import("display.zig");
 const bind = @import("bind.zig");
+const channel = @import("channel.zig");
 const commands = @import("commands.zig");
 const completion = @import("completion.zig");
 const credentials = @import("credentials.zig");
@@ -30,6 +31,7 @@ comptime {
     _ = @import("picker.zig");
     _ = @import("platform.zig");
     _ = @import("bind.zig");
+    _ = @import("channel.zig");
     _ = @import("commands.zig");
     _ = @import("completion.zig");
     _ = @import("credentials.zig");
@@ -47,6 +49,8 @@ const KEYCHAIN_CODE = "Claude Code-credentials";
 const DESKTOP_FLAG = "--desktop";
 const ALL_FLAG = "--all";
 const FROM_CWD_FLAG = "--from-cwd";
+const EDGE_FLAG = "--edge";
+const VERBOSE_FLAG = "--verbose";
 const SHELL_FLAG = "--shell";
 const GITHUB_REPO = "mtxr/claude-switch";
 const VERSION = "0.2.6"; // x-release-please-version
@@ -218,8 +222,7 @@ fn run(gpa: std.mem.Allocator, io: std.Io, args: []const []const u8) !void {
     } else if (std.mem.eql(u8, cmd, "doctor")) {
         return cmdDoctor(gpa, io);
     } else if (std.mem.eql(u8, cmd, "update")) {
-        const verbose = args.len >= 2 and std.mem.eql(u8, args[1], "--verbose");
-        return cmdUpdate(gpa, io, verbose);
+        return cmdUpdate(gpa, io, hasFlag(args, VERBOSE_FLAG), hasFlag(args, EDGE_FLAG));
     } else if (std.mem.eql(u8, cmd, "run")) {
         const name = (try resolveName(gpa, io, given, name_source, cmd, "Run with profile > ")) orelse return;
         defer gpa.free(name);
@@ -251,7 +254,9 @@ fn run(gpa: std.mem.Allocator, io: std.Io, args: []const []const u8) !void {
     } else if (std.mem.eql(u8, cmd, "logout-all")) {
         return profile.cmdLogoutAll(gpa, io, opts);
     } else if (std.mem.eql(u8, cmd, "--version") or std.mem.eql(u8, cmd, "-v")) {
-        display.print("csw {s}\n", .{VERSION});
+        const shown = try channel.versionString(gpa, VERSION, channel.embedded_commit);
+        defer gpa.free(shown);
+        display.print("csw {s}\n", .{shown});
     } else if (std.mem.eql(u8, cmd, "--help") or std.mem.eql(u8, cmd, "-h")) {
         printHelp(gpa);
     } else {
@@ -677,7 +682,7 @@ fn printCodeSession(gpa: std.mem.Allocator, oauth: std.json.Value) !void {
     display.row("Token", token_preview);
 }
 
-fn cmdUpdate(gpa: std.mem.Allocator, io: std.Io, verbose: bool) !void {
+fn cmdUpdate(gpa: std.mem.Allocator, io: std.Io, verbose: bool, edge: bool) !void {
     var exe_buf: [std.fs.max_path_bytes]u8 = undefined;
     const exe_path = platform.executablePath(&exe_buf) orelse {
         display.err("could not determine executable path");
@@ -692,6 +697,7 @@ fn cmdUpdate(gpa: std.mem.Allocator, io: std.Io, verbose: bool) !void {
         display.info(managed);
         return;
     }
+    if (edge) return updateEdge(gpa, io, real_path, verbose);
 
     display.info("Checking for updates...");
 
@@ -739,11 +745,20 @@ fn cmdUpdate(gpa: std.mem.Allocator, io: std.Io, verbose: bool) !void {
         return error.VersionUnknown;
     }
 
-    if (std.mem.eql(u8, latest, VERSION)) {
-        const msg = try std.fmt.allocPrint(gpa, "Already up to date (v{s})", .{VERSION});
-        defer gpa.free(msg);
-        display.ok(msg);
-        return;
+    switch (channel.stableDecision(channel.isEdge(channel.embedded_commit), latest, VERSION)) {
+        .already_current => {
+            const msg = try std.fmt.allocPrint(gpa, "Already up to date (v{s})", .{VERSION});
+            defer gpa.free(msg);
+            display.ok(msg);
+            return;
+        },
+        .stay_on_edge => {
+            const msg = try channel.edgeNotice(gpa, VERSION, channel.embedded_commit, latest);
+            defer gpa.free(msg);
+            display.info(msg);
+            return;
+        },
+        .install => {},
     }
 
     const update_msg = try std.fmt.allocPrint(gpa, "Update available: v{s} → v{s}", .{ VERSION, latest });
@@ -773,22 +788,70 @@ fn cmdUpdate(gpa: std.mem.Allocator, io: std.Io, verbose: bool) !void {
     }
 
     update.applyUpdate(gpa, io, .{ .download = update.curlDownload }, real_path, base_url, asset) catch |e| {
-        switch (e) {
-            error.DownloadFailed => display.print(
-                "❌  download failed — check your connection or visit https://github.com/{s}/releases\n",
-                .{GITHUB_REPO},
-            ),
-            error.ChecksumsUnavailable => display.err("could not download SHA256SUMS for this release; the installed binary was left untouched"),
-            error.ChecksumMissing => display.err("this asset is not listed in SHA256SUMS; the installed binary was left untouched"),
-            error.ChecksumMismatch => display.err("checksum mismatch for the downloaded binary; the installed binary was left untouched"),
-            else => display.err("could not replace the installed binary; it was left untouched"),
-        }
+        reportUpdateFailure(e);
         return e;
     };
 
     const done_msg = try std.fmt.allocPrint(gpa, "Updated to v{s}", .{latest});
     defer gpa.free(done_msg);
     display.ok(done_msg);
+}
+
+fn reportUpdateFailure(e: anyerror) void {
+    switch (e) {
+        error.DownloadFailed => display.print(
+            "❌  download failed — check your connection or visit https://github.com/{s}/releases\n",
+            .{GITHUB_REPO},
+        ),
+        error.ChecksumsUnavailable => display.err("could not download SHA256SUMS for this release; the installed binary was left untouched"),
+        error.ChecksumMissing => display.err("this asset is not listed in SHA256SUMS; the installed binary was left untouched"),
+        error.ChecksumMismatch => display.err("checksum mismatch for the downloaded file; the installed binary was left untouched"),
+        error.EdgeCommitUnavailable => display.err("could not read EDGE_COMMIT from the edge release; the installed binary was left untouched"),
+        error.EdgeCommitInvalid => display.err("EDGE_COMMIT is not a full commit SHA; the installed binary was left untouched"),
+        else => display.err("could not replace the installed binary; it was left untouched"),
+    }
+}
+
+fn updateEdge(gpa: std.mem.Allocator, io: std.Io, real_path: []const u8, verbose: bool) !void {
+    var asset_buf: [64]u8 = undefined;
+    const asset = platform.releaseAsset(&asset_buf) catch {
+        platform.notSupported("csw update");
+        return error.UnsupportedPlatform;
+    };
+    const base_url = try channel.edgeBaseUrl(gpa, GITHUB_REPO);
+    defer gpa.free(base_url);
+
+    display.info("Checking the edge channel...");
+    if (verbose) {
+        const url_msg = try std.fmt.allocPrint(gpa, "URL: {s}/{s}", .{ base_url, asset });
+        defer gpa.free(url_msg);
+        display.info(url_msg);
+    }
+
+    const result = update.applyEdgeUpdate(gpa, io, .{ .download = update.curlDownload }, real_path, base_url, asset, channel.embedded_commit) catch |e| {
+        reportUpdateFailure(e);
+        return e;
+    };
+
+    switch (result.status) {
+        .current => {
+            const msg = try std.fmt.allocPrint(gpa, "Already on edge {s}", .{channel.shortSha(&result.commit)});
+            defer gpa.free(msg);
+            display.ok(msg);
+        },
+        .updated => {
+            const label = try channel.transitionLabel(gpa, VERSION, channel.embedded_commit, &result.commit);
+            defer gpa.free(label);
+            const msg = try std.fmt.allocPrint(gpa, "Updated to {s}", .{label});
+            defer gpa.free(msg);
+            display.ok(msg);
+            const notes = try channel.edgeNotesUrl(gpa, GITHUB_REPO);
+            defer gpa.free(notes);
+            const notes_msg = try std.fmt.allocPrint(gpa, "Notes: {s}", .{notes});
+            defer gpa.free(notes_msg);
+            display.info(notes_msg);
+        },
+    }
 }
 
 test "hasFlag finds --desktop after the command only" {
