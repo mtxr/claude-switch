@@ -692,7 +692,7 @@ fn cmdUpdate(gpa: std.mem.Allocator, io: std.Io, verbose: bool, edge: bool) !voi
     const real_path = update.resolveExecutable(&real_buf, exe_path);
     const kind = update.detectInstall(real_path);
     if (kind != .standalone) {
-        const managed = try update.managedMessage(gpa, kind);
+        const managed = if (edge) try update.managedEdgeMessage(gpa, kind) else try update.managedMessage(gpa, kind);
         defer gpa.free(managed);
         display.info(managed);
         return;

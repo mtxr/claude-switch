@@ -53,7 +53,7 @@ Windows is not supported natively. Under WSL, use any of the Linux options above
 - Install it with `CSW_CHANNEL=edge` set for `install.sh`.
 - Switch an existing install with `csw update --edge`. Repeat it to follow new edge builds. `csw --version` shows `<version>-edge+<commit>`.
 - Edge downloads are verified against the release `SHA256SUMS` like stable ones.
-- To leave edge, wait for the next stable release and run `csw update`, or reinstall stable with the plain install script. Package-manager installs always follow stable.
+- To leave edge, wait for the next stable release and run `csw update`, or reinstall stable with the plain install script. Package-manager installs always follow stable, and `csw update --edge` on them explains how to switch to a standalone install.
 
 ### Verifying a download
 
