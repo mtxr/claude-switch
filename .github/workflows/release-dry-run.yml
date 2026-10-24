@@ -1,0 +1,79 @@
+name: Release dry run
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version used for the package names
+        default: 0.0.0-dryrun
+  pull_request:
+    paths:
+      - .github/workflows/release-*.yml
+      - .github/release-please-config.json
+      - packaging/**
+      - build.zig
+      - build.zig.zon
+
+permissions:
+  contents: read
+
+jobs:
+  assets:
+    uses: ./.github/workflows/release-assets.yml
+    with:
+      tag: v${{ inputs.version || '0.0.0-dryrun' }}
+      publish: false
+
+  verify:
+    needs: assets
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+          path: dist
+
+      - name: Verify the checksums
+        run: |
+          cd dist
+          ls -l
+          sha256sum -c SHA256SUMS
+          for asset in csw-aarch64-apple-darwin csw-x86_64-apple-darwin csw-x86_64-unknown-linux-musl csw-aarch64-unknown-linux-musl; do
+            grep -q " $asset\$" SHA256SUMS
+          done
+
+      - name: Render the Homebrew formula and the PKGBUILD
+        run: |
+          packaging/render.sh homebrew 0.0.0 dist/SHA256SUMS > /dev/null
+          packaging/render.sh aur 0.0.0 dist/SHA256SUMS > /dev/null
+
+      - name: Smoke test the Linux binary in containers
+        run: |
+          chmod +x dist/csw-x86_64-unknown-linux-musl
+          for image in alpine:latest debian:stable fedora:latest; do
+            docker run --rm -v "$PWD:/work:ro" -w /work "$image" \
+              sh packaging/smoke.sh /work/dist/csw-x86_64-unknown-linux-musl
+          done
+
+      - name: Install and remove the deb on Debian
+        run: |
+          docker run --rm -v "$PWD/dist:/dist:ro" debian:stable sh -ec '
+            apt-get update -qq
+            apt-get install -y -qq /dist/csw_*_amd64.deb
+            csw --version
+            test -s /usr/share/man/man1/csw.1.gz
+            apt-get remove -y -qq csw
+            test ! -e /usr/bin/csw
+          '
+
+      - name: Install and remove the rpm on Fedora
+        run: |
+          docker run --rm -v "$PWD/dist:/dist:ro" fedora:latest sh -ec '
+            dnf install -y -q /dist/csw-*.x86_64.rpm
+            csw --version
+            test -s /usr/share/man/man1/csw.1.gz
+            rpm -e csw
+            test ! -e /usr/bin/csw
+          '

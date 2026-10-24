@@ -1,0 +1,46 @@
+name: Release retry
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag of a draft release to finish, for example v1.0.0
+        required: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ inputs.tag }}
+    permissions:
+      contents: read
+    steps:
+      - name: Require an unpublished draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          draft=$(gh release view "$TAG" --repo ${{ github.repository }} --json isDraft -q .isDraft)
+          if [ "$draft" != "true" ]; then
+            echo "::error::$TAG is not a draft release, refusing to touch it"
+            exit 1
+          fi
+
+  assets:
+    needs: check
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/release-assets.yml
+    with:
+      tag: ${{ inputs.tag }}
+      publish: true
+
+  finalize:
+    needs: assets
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release-finalize.yml
+    with:
+      tag: ${{ inputs.tag }}
+    secrets: inherit

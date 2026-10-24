@@ -23,180 +23,23 @@ jobs:
           config-file: .github/release-please-config.json
           manifest-file: .github/.release-please-manifest.json
 
-  build:
+  assets:
     needs: release-please
     if: ${{ needs.release-please.outputs.release_created == 'true' }}
-    strategy:
-      matrix:
-        include:
-          - runner: macos-latest
-            asset: csw-aarch64-apple-darwin
-          - runner: macos-15-intel
-            asset: csw-x86_64-apple-darwin
-          - runner: ubuntu-latest
-            asset: csw-x86_64-unknown-linux-musl
-            target: x86_64-linux-musl
-          - runner: ubuntu-latest
-            asset: csw-aarch64-unknown-linux-musl
-            target: aarch64-linux-musl
-    runs-on: ${{ matrix.runner }}
     permissions:
       contents: write
       id-token: write
       attestations: write
-    steps:
-      - uses: actions/checkout@v4
+    uses: ./.github/workflows/release-assets.yml
+    with:
+      tag: ${{ needs.release-please.outputs.tag_name }}
+      publish: true
 
-      - name: Install Zig 0.17.0
-        uses: mlugg/setup-zig@v2
-        with:
-          version: "0.17.0"
-
-      - name: Build
-        shell: bash
-        run: |
-          if [ -n "${{ matrix.target }}" ]; then
-            zig build -Doptimize=ReleaseSmall -Dtarget=${{ matrix.target }}
-          else
-            zig build -Doptimize=ReleaseSmall
-            strip zig-out/bin/csw
-          fi
-
-      - name: Upload binary to release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          cp zig-out/bin/csw "zig-out/bin/${{ matrix.asset }}"
-          gh release upload ${{ needs.release-please.outputs.tag_name }} \
-            "zig-out/bin/${{ matrix.asset }}" \
-            --repo ${{ github.repository }}
-
-      - name: Attest build provenance
-        uses: actions/attest-build-provenance@v2.4.0
-        with:
-          subject-path: zig-out/bin/${{ matrix.asset }}
-
-  packages:
-    needs: [release-please, build]
-    runs-on: ubuntu-latest
+  finalize:
+    needs: [release-please, assets]
     permissions:
       contents: write
-      id-token: write
-      attestations: write
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Download Linux binaries
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          mkdir bin
-          gh release download ${{ needs.release-please.outputs.tag_name }} \
-            --repo ${{ github.repository }} \
-            --pattern 'csw-*-unknown-linux-musl' \
-            --dir bin
-          chmod +x bin/*
-
-      - name: Build deb and rpm packages
-        run: |
-          tag="${{ needs.release-please.outputs.tag_name }}"
-          packaging/build-packages.sh "${tag#v}" bin dist
-
-      - name: Upload packages to release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release upload ${{ needs.release-please.outputs.tag_name }} \
-            dist/* \
-            --repo ${{ github.repository }}
-
-      - name: Attest packages
-        uses: actions/attest-build-provenance@v2.4.0
-        with:
-          subject-path: dist/*
-
-  checksums:
-    needs: [release-please, build, packages]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      id-token: write
-      attestations: write
-    steps:
-      - name: Generate SHA256SUMS
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          mkdir assets
-          gh release download ${{ needs.release-please.outputs.tag_name }} \
-            --repo ${{ github.repository }} \
-            --pattern 'csw-*' \
-            --pattern 'csw_*' \
-            --dir assets
-          cd assets
-          sha256sum csw-* csw_* > SHA256SUMS
-          cat SHA256SUMS
-
-      - name: Upload SHA256SUMS to release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release upload ${{ needs.release-please.outputs.tag_name }} \
-            assets/SHA256SUMS \
-            --repo ${{ github.repository }} \
-            --clobber
-
-      - name: Attest SHA256SUMS
-        uses: actions/attest-build-provenance@v2.4.0
-        with:
-          subject-path: assets/SHA256SUMS
-
-  publish-packages:
-    needs: [release-please, checksums]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    env:
-      HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-    steps:
-      - name: Check the tap token
-        id: tap
-        run: |
-          if [ -n "$HOMEBREW_TAP_TOKEN" ]; then
-            echo "enabled=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "::notice::HOMEBREW_TAP_TOKEN is not set, skipping the Homebrew tap update"
-          fi
-
-      - uses: actions/checkout@v4
-        if: steps.tap.outputs.enabled == 'true'
-
-      - name: Render the formula
-        if: steps.tap.outputs.enabled == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          tag="${{ needs.release-please.outputs.tag_name }}"
-          gh release download "$tag" --repo ${{ github.repository }} --pattern SHA256SUMS --dir .
-          packaging/render.sh homebrew "${tag#v}" SHA256SUMS > csw.rb
-
-      - name: Push the formula to the tap
-        if: steps.tap.outputs.enabled == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-        run: |
-          gh auth setup-git
-          gh repo clone mtxr/homebrew-tap tap
-          mkdir -p tap/Formula tap/Aliases
-          cp csw.rb tap/Formula/csw.rb
-          ln -sfn ../Formula/csw.rb tap/Aliases/claude-switch
-          cd tap
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add Formula/csw.rb Aliases/claude-switch
-          if git diff --cached --quiet; then
-            echo "Formula already up to date"
-          else
-            git commit -m "csw ${{ needs.release-please.outputs.tag_name }}"
-            git push
-          fi
+    uses: ./.github/workflows/release-finalize.yml
+    with:
+      tag: ${{ needs.release-please.outputs.tag_name }}
+    secrets: inherit
