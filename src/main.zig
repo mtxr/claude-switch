@@ -53,7 +53,7 @@ const EDGE_FLAG = "--edge";
 const VERBOSE_FLAG = "--verbose";
 const SHELL_FLAG = "--shell";
 const GITHUB_REPO = "mtxr/claude-switch";
-const VERSION = "0.2.6"; // x-release-please-version
+const VERSION = "1.0.0"; // x-release-please-version
 const UPDATE_CACHE_FILE = "/tmp/csw-update-cache";
 const UPDATE_CHECK_INTERVAL_S = 86400;
 
