@@ -29,6 +29,26 @@ The workflow only has `contents: read`, so it cannot write to a release even by 
 - The draft is beyond repair: `gh release delete vX.Y.Z --cleanup-tag --yes`, fix the problem, then run `gh workflow run release-retry.yml` after recreating the release, or revert the release PR commit and let Release Please open a new one.
 - A published release turns out to be bad: `gh release edit vX.Y.Z --latest=false` immediately so installers stop picking it, then ship a fixed version.
 
+## Edge channel
+
+`edge` is a rolling pre-release that follows `main`, for people who want unreleased changes. It never touches the stable flow: the tag is not a version (Release Please ignores tags without `X.Y.Z`), the release is a pre-release that is never `latest`, and neither the tap nor stable tags are involved.
+
+`edge.yml` runs on every push to `main` that changes `src/**`, `build.zig`, `build.zig.zon`, `packaging/**` or `install.sh`, and skips Release Please commits. It:
+
+1. Builds the four binaries with `-Dedge-commit=<sha>`, so each one knows which commit it came from.
+2. Generates the release notes with `packaging/edge-notes.sh`: the exact commit, the latest stable release it is based on, the commits since the previous edge build and the commits since that stable release, grouped by conventional commit type.
+3. Writes `EDGE_COMMIT` (the full commit SHA) and `SHA256SUMS` (the binaries and `EDGE_COMMIT`), and attests the files.
+4. Publishes: replaces the assets of the existing `edge` release, moves the `edge` tag to the commit, updates the notes and uploads `SHA256SUMS` last. `SHA256SUMS` is removed first, so a run that fails halfway leaves a release that installers refuse (they fail closed without it) rather than one whose checksums describe other files. Re-running the workflow repairs it.
+5. Verifies the result: published pre-release, tag on the right commit, `releases/latest` unchanged and not `edge`, and `sha256sum -c SHA256SUMS` on a fresh download.
+
+Builds from older commits never overwrite newer ones: the publish job only runs while the commit is still the tip of `main`, and publishes are serialized.
+
+To run it by hand on `main`: `gh workflow run edge.yml -f dry_run=false`. With the default `dry_run=true` it only builds and prints the notes in the job summary.
+
+To reset the channel: `gh release delete edge --cleanup-tag --yes`. The next run recreates it. This does not affect stable releases.
+
+The publish job refuses to run until `build.zig` has the `edge-commit` option, so it cannot release binaries that cannot report their commit.
+
 ## Homebrew tap token
 
 `HOMEBREW_TAP_TOKEN` is a fine-grained personal access token limited to `mtxr/homebrew-tap` with `Contents: Read and write`, stored as an Actions secret of this repository. Only the `publish-packages` job reads it. Rotate it before it expires (`gh secret set HOMEBREW_TAP_TOKEN --repo mtxr/claude-switch`).
@@ -39,3 +59,4 @@ The workflow only has `contents: read`, so it cannot write to a release even by 
 - `gh release upload`, `download` and `edit` on a draft by tag.
 - The attestations (`gh attestation verify <asset> --repo mtxr/claude-switch`).
 - The push to the tap.
+- The first `edge` run: creating the pre-release, moving the tag on later runs and the final verification step.

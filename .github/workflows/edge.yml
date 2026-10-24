@@ -1,0 +1,247 @@
+name: Edge
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - src/**
+      - build.zig
+      - build.zig.zon
+      - packaging/**
+      - install.sh
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Build and print the notes without touching the edge tag or release
+        type: boolean
+        default: true
+  pull_request:
+    paths:
+      - .github/workflows/edge.yml
+      - packaging/edge-notes.sh
+      - packaging/edge-notes-test.sh
+
+permissions:
+  contents: read
+
+env:
+  EDGE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+
+jobs:
+  notes-test:
+    if: "!startsWith(github.event.head_commit.message, 'chore(main): release')"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Test the notes generator
+        run: |
+          shellcheck packaging/edge-notes.sh packaging/edge-notes-test.sh
+          packaging/edge-notes-test.sh
+
+  build:
+    if: "!startsWith(github.event.head_commit.message, 'chore(main): release')"
+    strategy:
+      matrix:
+        include:
+          - runner: macos-latest
+            asset: csw-aarch64-apple-darwin
+          - runner: macos-15-intel
+            asset: csw-x86_64-apple-darwin
+          - runner: ubuntu-latest
+            asset: csw-x86_64-unknown-linux-musl
+            target: x86_64-linux-musl
+          - runner: ubuntu-latest
+            asset: csw-aarch64-unknown-linux-musl
+            target: aarch64-linux-musl
+    runs-on: ${{ matrix.runner }}
+    concurrency:
+      group: edge-build-${{ matrix.asset }}-${{ github.ref }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EDGE_SHA }}
+
+      - name: Install Zig 0.17.0
+        uses: mlugg/setup-zig@v2
+        with:
+          version: "0.17.0"
+
+      - name: Build
+        shell: bash
+        run: |
+          flags=()
+          if grep -q 'edge-commit' build.zig; then
+            flags+=("-Dedge-commit=$EDGE_SHA")
+          else
+            echo "::warning::build.zig has no edge-commit option yet, so this binary does not embed its commit. Publishing is refused until it does."
+          fi
+          if [ -n "${{ matrix.target }}" ]; then
+            zig build -Doptimize=ReleaseSmall -Dtarget=${{ matrix.target }} "${flags[@]}"
+          else
+            zig build -Doptimize=ReleaseSmall "${flags[@]}"
+            strip zig-out/bin/csw
+          fi
+          cp zig-out/bin/csw "zig-out/bin/${{ matrix.asset }}"
+
+      - name: Keep the binary as a workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: edge-${{ matrix.asset }}
+          path: zig-out/bin/${{ matrix.asset }}
+          retention-days: 3
+          if-no-files-found: error
+
+  notes:
+    if: "!startsWith(github.event.head_commit.message, 'chore(main): release')"
+    runs-on: ubuntu-latest
+    concurrency:
+      group: edge-notes-${{ github.ref }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EDGE_SHA }}
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Generate the release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          stable="$(gh api "repos/$REPO/releases/latest" -q .tag_name 2>/dev/null || true)"
+          previous=""
+          if gh release download edge --repo "$REPO" --pattern EDGE_COMMIT --output previous.txt 2>/dev/null; then
+            candidate="$(tr -d '[:space:]' < previous.txt)"
+            if printf '%s' "$candidate" | grep -Eq '^[0-9a-f]{40}$'; then
+              previous="$candidate"
+            fi
+          fi
+          echo "stable=${stable:-none} previous=${previous:-none}"
+          mkdir notes
+          packaging/edge-notes.sh "$REPO" "$EDGE_SHA" "$stable" "$previous" > notes/notes.md
+          cat notes/notes.md
+          cat notes/notes.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Keep the notes as a workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: edge-notes
+          path: notes/notes.md
+          retention-days: 3
+          if-no-files-found: error
+
+  publish:
+    needs: [notes-test, build, notes]
+    if: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run)) }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    concurrency:
+      group: edge-publish
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EDGE_SHA }}
+
+      - name: Refuse to publish binaries that do not embed their commit
+        run: |
+          if ! grep -q 'edge-commit' build.zig; then
+            echo "::error::build.zig has no edge-commit option, so the edge binaries cannot report their commit. Merge the client side first."
+            exit 1
+          fi
+
+      - name: Skip when a newer commit already landed
+        id: tip
+        run: |
+          tip="$(gh api "repos/$REPO/commits/main" -q .sha)"
+          if [ "$tip" != "$EDGE_SHA" ]; then
+            echo "::notice::main moved to $tip, a newer edge run will publish instead"
+            echo "superseded=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download the built binaries and notes
+        if: steps.tip.outputs.superseded != 'true'
+        uses: actions/download-artifact@v4
+        with:
+          pattern: edge-*
+          merge-multiple: true
+          path: staging
+
+      - name: Assemble the release assets
+        if: steps.tip.outputs.superseded != 'true'
+        run: |
+          mkdir dist
+          for asset in \
+            csw-aarch64-apple-darwin \
+            csw-x86_64-apple-darwin \
+            csw-x86_64-unknown-linux-musl \
+            csw-aarch64-unknown-linux-musl; do
+            test -f "staging/$asset" || { echo "::error::missing built asset $asset"; exit 1; }
+            cp "staging/$asset" dist/
+          done
+          test -s staging/notes.md || { echo "::error::missing release notes"; exit 1; }
+          printf '%s\n' "$EDGE_SHA" > dist/EDGE_COMMIT
+          cd dist
+          sha256sum csw-* EDGE_COMMIT > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Attest build provenance
+        if: steps.tip.outputs.superseded != 'true'
+        uses: actions/attest-build-provenance@v2.4.0
+        with:
+          subject-path: |
+            dist/csw-*
+            dist/EDGE_COMMIT
+            dist/SHA256SUMS
+
+      - name: Remember the latest stable release
+        if: steps.tip.outputs.superseded != 'true'
+        id: before
+        run: |
+          echo "latest=$(gh api "repos/$REPO/releases/latest" -q .tag_name 2>/dev/null || echo none)" >> "$GITHUB_OUTPUT"
+
+      - name: Publish the edge pre-release
+        if: steps.tip.outputs.superseded != 'true'
+        run: |
+          title="edge+${EDGE_SHA:0:7}"
+          if gh release view edge --repo "$REPO" >/dev/null 2>&1; then
+            gh release delete-asset edge SHA256SUMS --yes --repo "$REPO" 2>/dev/null || true
+            gh release upload edge dist/csw-* dist/EDGE_COMMIT --clobber --repo "$REPO"
+            gh api -X PATCH "repos/$REPO/git/refs/tags/edge" -f sha="$EDGE_SHA" -F force=true \
+              || gh api -X POST "repos/$REPO/git/refs" -f ref=refs/tags/edge -f sha="$EDGE_SHA"
+            gh release edit edge --prerelease --latest=false --title "$title" --notes-file staging/notes.md --repo "$REPO"
+            gh release upload edge dist/SHA256SUMS --clobber --repo "$REPO"
+          else
+            gh release create edge dist/csw-* dist/EDGE_COMMIT dist/SHA256SUMS \
+              --draft --prerelease --latest=false --target "$EDGE_SHA" \
+              --title "$title" --notes-file staging/notes.md --repo "$REPO"
+            gh release edit edge --draft=false --prerelease --latest=false --repo "$REPO"
+          fi
+
+      - name: Verify the published release
+        if: steps.tip.outputs.superseded != 'true'
+        run: |
+          state="$(gh release view edge --repo "$REPO" --json isDraft,isPrerelease -q '.isDraft,.isPrerelease' | tr '\n' ' ')"
+          [ "$state" = "false true " ] || { echo "::error::edge must be a published pre-release, got: $state"; exit 1; }
+
+          tag_sha="$(gh api "repos/$REPO/git/ref/tags/edge" -q .object.sha)"
+          [ "$tag_sha" = "$EDGE_SHA" ] || { echo "::error::edge tag points at $tag_sha, expected $EDGE_SHA"; exit 1; }
+
+          latest="$(gh api "repos/$REPO/releases/latest" -q .tag_name 2>/dev/null || echo none)"
+          [ "$latest" = "${{ steps.before.outputs.latest }}" ] || { echo "::error::releases/latest changed from ${{ steps.before.outputs.latest }} to $latest"; exit 1; }
+          [ "$latest" != "edge" ] || { echo "::error::edge became the latest release"; exit 1; }
+
+          mkdir verify
+          gh release download edge --repo "$REPO" --dir verify
+          (cd verify && sha256sum -c SHA256SUMS)
+          [ "$(tr -d '[:space:]' < verify/EDGE_COMMIT)" = "$EDGE_SHA" ] || { echo "::error::EDGE_COMMIT does not match"; exit 1; }
