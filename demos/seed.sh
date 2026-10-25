@@ -16,5 +16,7 @@ seed_profile() {
 
 seed_profile work ada@acme.example "Acme Inc" team
 seed_profile personal ada@home.example "" pro
+seed_profile freelance ada@studio.example "Ada Studio" max
 ln -s "$HOME/.claude.work.json" "$HOME/.claude.json"
 ln -s "$HOME/.claude.work" "$HOME/.claude"
+printf "PS1='%s '\n" '$' > "$HOME/.bashrc"

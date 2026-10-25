@@ -27,9 +27,15 @@ docker run --rm --init --shm-size=1g \
     mkdir -p "$HOME" /tmp/bin
     install -m 755 /demos/fake-claude.sh /tmp/bin/claude
     export PATH="/tmp/bin:$PATH"
-    sh /demos/seed.sh
+    apt-get update -qq >/dev/null
+    apt-get install -y -qq tmux >/dev/null
     cd /vhs
-    vhs /demos/demo.tape
+    for tape in /demos/*.tape; do
+      rm -rf "$HOME"
+      mkdir -p "$HOME"
+      sh /demos/seed.sh
+      vhs "$tape"
+    done
   '
 
 rm -rf "$bin"

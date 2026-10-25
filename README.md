@@ -89,6 +89,7 @@ Other projects worth a look, not evaluated here: [clauth](https://crates.io/crat
 ## Documentation
 
 - [Install](docs/install.md)
+- [More demos](docs/demos.md)
 - [Usage](docs/usage.md)
 - [Profiles in several terminals and directories](docs/profiles.md)
 - [How it works](docs/how-it-works.md)
