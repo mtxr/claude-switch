@@ -27,18 +27,61 @@ pub fn isRunning(gpa: std.mem.Allocator, io: std.Io) bool {
     };
 }
 
+const QuitStep = enum { ask, terminate, kill };
+
+const POLL_INTERVAL_MS = 250;
+const QUIT_STEPS = [_]struct { step: QuitStep, wait_ms: u64 }{
+    .{ .step = .ask, .wait_ms = 5000 },
+    .{ .step = .terminate, .wait_ms = 2000 },
+    .{ .step = .kill, .wait_ms = 2000 },
+};
+
+const SystemProcess = struct {
+    gpa: std.mem.Allocator,
+    io: std.Io,
+
+    fn running(self: SystemProcess) bool {
+        return isRunning(self.gpa, self.io);
+    }
+
+    fn send(self: SystemProcess, step: QuitStep) void {
+        const argv: []const []const u8 = switch (step) {
+            .ask => &.{ "osascript", "-e", "tell application \"Claude\" to quit" },
+            .terminate => &.{ "pkill", "-TERM", "-x", "Claude" },
+            .kill => &.{ "pkill", "-9", "-x", "Claude" },
+        };
+        const result = std.process.run(self.gpa, self.io, .{
+            .argv = argv,
+            .stdout_limit = .limited(1024),
+            .stderr_limit = .limited(1024),
+        }) catch return;
+        self.gpa.free(result.stdout);
+        self.gpa.free(result.stderr);
+    }
+
+    fn pause(self: SystemProcess, ms: u64) void {
+        std.Io.sleep(self.io, .{ .nanoseconds = ms * std.time.ns_per_ms }, .real) catch {};
+    }
+};
+
+fn quitWith(process: anytype) error{StillRunning}!void {
+    for (QUIT_STEPS) |entry| {
+        process.send(entry.step);
+        var waited: u64 = 0;
+        while (waited < entry.wait_ms) : (waited += POLL_INTERVAL_MS) {
+            if (!process.running()) return;
+            process.pause(POLL_INTERVAL_MS);
+        }
+    }
+    if (process.running()) return error.StillRunning;
+}
+
 pub fn quit(gpa: std.mem.Allocator, io: std.Io) void {
     if (comptime !platform.supports_desktop) return;
     if (!isRunning(gpa, io)) return;
     display.info("Quitting Claude Desktop...");
-    const result = std.process.run(gpa, io, .{
-        .argv = &.{ "pkill", "-9", "-x", "Claude" },
-        .stdout_limit = .limited(1024),
-        .stderr_limit = .limited(1024),
-    }) catch return;
-    gpa.free(result.stdout);
-    gpa.free(result.stderr);
-    std.Io.sleep(io, .{ .nanoseconds = 3 * std.time.ns_per_s }, .real) catch {};
+    quitWith(SystemProcess{ .gpa = gpa, .io = io }) catch
+        display.warnErr("Claude Desktop is still running; close it manually before continuing");
 }
 
 pub fn launch(gpa: std.mem.Allocator, io: std.Io) void {
@@ -511,6 +554,58 @@ test "getSessionKey fails when DB does not exist" {
     const base = try alloc.dupe(u8, base_buf[0..base_len]);
     defer alloc.free(base);
     try std.testing.expectError(error.CookiesDbNotFound, getSessionKeyWithKeyIn(alloc, base, "key"));
+}
+
+const FakeProcess = struct {
+    exits_after: ?QuitStep,
+    sent: [3]?QuitStep = .{ null, null, null },
+    sent_count: usize = 0,
+    pauses: u64 = 0,
+    gone: bool = false,
+
+    fn running(self: *FakeProcess) bool {
+        return !self.gone;
+    }
+
+    fn send(self: *FakeProcess, step: QuitStep) void {
+        self.sent[self.sent_count] = step;
+        self.sent_count += 1;
+        if (self.exits_after) |exit_step| {
+            if (exit_step == step) self.gone = true;
+        }
+    }
+
+    fn pause(self: *FakeProcess, ms: u64) void {
+        self.pauses += ms;
+    }
+};
+
+test "quitWith stops after a polite ask when the app exits" {
+    var fake = FakeProcess{ .exits_after = .ask };
+    try quitWith(&fake);
+    try std.testing.expectEqual(@as(usize, 1), fake.sent_count);
+    try std.testing.expectEqual(QuitStep.ask, fake.sent[0].?);
+}
+
+test "quitWith escalates to terminate then kill" {
+    var terminated = FakeProcess{ .exits_after = .terminate };
+    try quitWith(&terminated);
+    try std.testing.expectEqual(@as(usize, 2), terminated.sent_count);
+    try std.testing.expectEqual(QuitStep.terminate, terminated.sent[1].?);
+    try std.testing.expectEqual(@as(u64, 5000), terminated.pauses);
+
+    var killed = FakeProcess{ .exits_after = .kill };
+    try quitWith(&killed);
+    try std.testing.expectEqual(@as(usize, 3), killed.sent_count);
+    try std.testing.expectEqual(QuitStep.kill, killed.sent[2].?);
+    try std.testing.expectEqual(@as(u64, 7000), killed.pauses);
+}
+
+test "quitWith fails when the app never exits" {
+    var fake = FakeProcess{ .exits_after = null };
+    try std.testing.expectError(error.StillRunning, quitWith(&fake));
+    try std.testing.expectEqual(@as(usize, 3), fake.sent_count);
+    try std.testing.expectEqual(@as(u64, 9000), fake.pauses);
 }
 
 test "Desktop operations are inert without support" {

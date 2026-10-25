@@ -15,6 +15,7 @@ const CODE_SERVICE = "Claude Code-credentials";
 const PROFILE_SERVICE_PREFIX = "csw-code-";
 const CREDENTIALS_FILE = ".credentials.json";
 const MAX_CREDENTIALS_BYTES = 64 * 1024;
+const MAX_ADD_COMMAND_BYTES = 4000;
 
 /// Maps a Keychain service name to the equivalent credentials file on Linux.
 pub fn credentialsPathIn(gpa: std.mem.Allocator, base: []const u8, service: []const u8) !?[]const u8 {
@@ -117,24 +118,97 @@ pub fn getAccount(gpa: std.mem.Allocator, io: std.Io, service: []const u8) []con
     return gpa.dupe(u8, "user") catch "user";
 }
 
+fn appendQuoted(gpa: std.mem.Allocator, out: *std.ArrayList(u8), text: []const u8) !void {
+    try out.append(gpa, '"');
+    for (text) |ch| {
+        switch (ch) {
+            '\n', '\r', 0 => return error.KeychainValueUnsafe,
+            '"', '\\' => try out.append(gpa, '\\'),
+            else => {},
+        }
+        try out.append(gpa, ch);
+    }
+    try out.append(gpa, '"');
+}
+
+/// Builds the `security -i` command that stores a generic password. Fails
+/// instead of truncating or altering the secret: line breaks cannot be quoted,
+/// and the interactive reader silently cuts lines past its buffer.
+pub fn addCommand(gpa: std.mem.Allocator, service: []const u8, account: []const u8, value: []const u8) ![]u8 {
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(gpa);
+    try out.appendSlice(gpa, "add-generic-password -s ");
+    try appendQuoted(gpa, &out, service);
+    try out.appendSlice(gpa, " -a ");
+    try appendQuoted(gpa, &out, account);
+    try out.appendSlice(gpa, " -w ");
+    try appendQuoted(gpa, &out, value);
+    try out.append(gpa, '\n');
+    if (out.items.len > MAX_ADD_COMMAND_BYTES) return error.KeychainValueTooLong;
+    return out.toOwnedSlice(gpa);
+}
+
+fn secureWipe(bytes: []u8) void {
+    std.crypto.secureZero(u8, bytes);
+}
+
 pub fn set(gpa: std.mem.Allocator, io: std.Io, service: []const u8, account: []const u8, value: []const u8) !void {
     if (comptime !platform.supports_keychain) return error.UnsupportedPlatform;
+
+    const command = addCommand(gpa, service, account, value) catch |e| {
+        const display = @import("display.zig");
+        switch (e) {
+            error.KeychainValueUnsafe => display.err("Keychain value contains a line break or NUL and cannot be stored safely"),
+            error.KeychainValueTooLong => display.err("Keychain value is too long to store without exposing it on a command line"),
+            else => {},
+        }
+        return e;
+    };
+    defer gpa.free(command);
+    defer secureWipe(command);
+
     delete(gpa, io, service) catch {};
 
-    const result = try std.process.run(gpa, io, .{
-        .argv = &.{ "security", "add-generic-password", "-s", service, "-a", account, "-w", value },
-        .stdout_limit = .limited(1024),
-        .stderr_limit = .limited(1024),
+    var child = try std.process.spawn(io, .{
+        .argv = &.{ "security", "-i" },
+        .stdin = .pipe,
+        .stdout = .ignore,
+        .stderr = .pipe,
     });
-    defer gpa.free(result.stdout);
-    defer gpa.free(result.stderr);
 
-    const success = switch (result.term) {
+    if (child.stdin) |stdin| {
+        var written: usize = 0;
+        while (written < command.len) {
+            const n = std.c.write(stdin.handle, command[written..].ptr, command.len - written);
+            if (n <= 0) break;
+            written += @intCast(n);
+        }
+        _ = std.c.close(stdin.handle);
+        child.stdin = null;
+    }
+
+    var err_buf: [1024]u8 = undefined;
+    var err_len: usize = 0;
+    if (child.stderr) |stderr| {
+        while (true) {
+            var chunk: [256]u8 = undefined;
+            const n = std.c.read(stderr.handle, &chunk, chunk.len);
+            if (n <= 0) break;
+            const take = @min(@as(usize, @intCast(n)), err_buf.len - err_len);
+            @memcpy(err_buf[err_len..][0..take], chunk[0..take]);
+            err_len += take;
+        }
+        _ = std.c.close(stderr.handle);
+        child.stderr = null;
+    }
+
+    const term = try child.wait(io);
+    const success = switch (term) {
         .exited => |code| code == 0,
         else => false,
     };
     if (!success) {
-        @import("display.zig").err(std.mem.trimEnd(u8, result.stderr, "\n\r"));
+        @import("display.zig").err(std.mem.trimEnd(u8, err_buf[0..err_len], "\n\r"));
         return error.KeychainWriteFailed;
     }
 }
@@ -187,6 +261,83 @@ test "set and get round-trip" {
     const val = try get(alloc, io, svc);
     defer alloc.free(val);
     try std.testing.expectEqualStrings("secret-value", val);
+}
+
+test "addCommand quotes service, account and value" {
+    const alloc = std.testing.allocator;
+    const cmd = try addCommand(alloc, "svc name", "us\"er", "{\"a\":\"b\\c d\"}");
+    defer alloc.free(cmd);
+    try std.testing.expectEqualStrings(
+        "add-generic-password -s \"svc name\" -a \"us\\\"er\" -w \"{\\\"a\\\":\\\"b\\\\c d\\\"}\"\n",
+        cmd,
+    );
+}
+
+test "addCommand keeps characters that need no escaping" {
+    const alloc = std.testing.allocator;
+    const cmd = try addCommand(alloc, "s", "a", "it's $x `y`; \té✓");
+    defer alloc.free(cmd);
+    try std.testing.expectEqualStrings("add-generic-password -s \"s\" -a \"a\" -w \"it's $x `y`; \té✓\"\n", cmd);
+}
+
+test "addCommand rejects line breaks and NUL in any field" {
+    const alloc = std.testing.allocator;
+    try std.testing.expectError(error.KeychainValueUnsafe, addCommand(alloc, "s", "a", "x\ny"));
+    try std.testing.expectError(error.KeychainValueUnsafe, addCommand(alloc, "s", "a", "x\ry"));
+    try std.testing.expectError(error.KeychainValueUnsafe, addCommand(alloc, "s", "a", "x\x00y"));
+    try std.testing.expectError(error.KeychainValueUnsafe, addCommand(alloc, "s\n", "a", "v"));
+    try std.testing.expectError(error.KeychainValueUnsafe, addCommand(alloc, "s", "a\n", "v"));
+}
+
+test "addCommand rejects commands the interactive reader would truncate" {
+    const alloc = std.testing.allocator;
+    const fits = try alloc.alloc(u8, 3900);
+    defer alloc.free(fits);
+    @memset(fits, 'x');
+    const ok = try addCommand(alloc, "s", "a", fits);
+    alloc.free(ok);
+
+    const too_long = try alloc.alloc(u8, MAX_ADD_COMMAND_BYTES);
+    defer alloc.free(too_long);
+    @memset(too_long, 'x');
+    try std.testing.expectError(error.KeychainValueTooLong, addCommand(alloc, "s", "a", too_long));
+}
+
+test "set and get round-trip a value with special characters" {
+    if (!realKeychainEnabled()) return error.SkipZigTest;
+    const alloc = std.testing.allocator;
+    var tio = std.Io.Threaded.init(std.heap.page_allocator, .{});
+    defer tio.deinit();
+    const io = tio.io();
+    const token = try testutil.uniqueToken(alloc);
+    defer alloc.free(token);
+    const svc = try std.fmt.allocPrint(alloc, "csw-test-{s}-special", .{token});
+    defer alloc.free(svc);
+    delete(alloc, io, svc) catch {};
+    defer delete(alloc, io, svc) catch {};
+
+    const value = "{\"k\":\"a \\\"q\\\" b\\\\c\",\"s\":\"it's $x `y`;\"}";
+    try set(alloc, io, svc, "test user", value);
+    const got = try get(alloc, io, svc);
+    defer alloc.free(got);
+    try std.testing.expectEqualStrings(value, got);
+}
+
+test "set refuses a value with a line break and stores nothing" {
+    if (!realKeychainEnabled()) return error.SkipZigTest;
+    const alloc = std.testing.allocator;
+    var tio = std.Io.Threaded.init(std.heap.page_allocator, .{});
+    defer tio.deinit();
+    const io = tio.io();
+    const token = try testutil.uniqueToken(alloc);
+    defer alloc.free(token);
+    const svc = try std.fmt.allocPrint(alloc, "csw-test-{s}-newline", .{token});
+    defer alloc.free(svc);
+    delete(alloc, io, svc) catch {};
+    defer delete(alloc, io, svc) catch {};
+
+    try std.testing.expectError(error.KeychainValueUnsafe, set(alloc, io, svc, "u", "a\nb"));
+    try std.testing.expect(!exists(alloc, io, svc));
 }
 
 test "set overwrites existing entry" {
