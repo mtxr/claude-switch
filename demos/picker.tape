@@ -14,7 +14,7 @@ Show
 
 Type "csw use" Enter
 Sleep 2500ms
-Type "free" Enter
+Type "os" Enter
 Sleep 2s
 Type "csw list" Enter
 Sleep 3s

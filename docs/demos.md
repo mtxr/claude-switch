@@ -2,6 +2,16 @@
 
 Recorded against fictional accounts and a fake `claude`. See [Development](development.md#demos) to regenerate them.
 
+## A profile per directory
+
+`csw bind` writes a `.csw` file. With the shell hook, entering the directory loads that profile and leaving it goes back to the active one. A `.csw` naming a profile that does not exist prints one warning and falls back.
+
+![Profiles loaded from the directory](demos/directory.gif)
+
+## Create, switch and delete
+
+![Creating, switching and deleting a profile](demos/manage.gif)
+
 ## Pick a profile without fzf
 
 `csw use` without a name opens the built-in picker. Type a number, a name or part of a name.

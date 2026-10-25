@@ -20,7 +20,7 @@ Tab
 Sleep 200ms
 Tab
 Sleep 2500ms
-Type "fr"
+Type "os"
 Tab
 Sleep 1500ms
 Enter
