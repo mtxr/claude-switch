@@ -131,8 +131,8 @@ pub fn ensureInnerConfigIn(gpa: std.mem.Allocator, dir: []const u8) !void {
 }
 
 fn repairRegularInner(gpa: std.mem.Allocator, inner: []const u8, p_json: []const u8) !void {
-    const inner_ns = regularFileMtimeNs(gpa, inner) orelse return error.NotARegularFile;
-    const outer_ns = regularFileMtimeNs(gpa, p_json);
+    const inner_ns = regularFileMtimeNs(inner) orelse return error.NotARegularFile;
+    const outer_ns = regularFileMtimeNs(p_json);
     if (outer_ns == null or inner_ns > outer_ns.?) try desktop.renameC(gpa, inner, p_json);
     try replaceWithLink(gpa, p_json, inner);
 }
@@ -152,14 +152,11 @@ fn replaceWithLink(gpa: std.mem.Allocator, target: []const u8, link: []const u8)
     };
 }
 
-fn regularFileMtimeNs(gpa: std.mem.Allocator, path: []const u8) ?i128 {
-    const path_z = gpa.dupeSentinel(u8, path, 0) catch return null;
-    defer gpa.free(path_z);
-    var st: std.c.Stat = undefined;
-    if (std.c.stat(path_z, &st) != 0) return null;
-    if (!std.c.S.ISREG(st.mode)) return null;
-    const t = st.mtime();
-    return @as(i128, t.sec) * std.time.ns_per_s + t.nsec;
+fn regularFileMtimeNs(path: []const u8) ?i128 {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const st = std.Io.Dir.cwd().statFile(io, path, .{}) catch return null;
+    if (st.kind != .file) return null;
+    return st.mtime.nanoseconds;
 }
 
 pub fn profileNameOfDir(dir: []const u8) ?[]const u8 {
