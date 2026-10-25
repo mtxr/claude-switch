@@ -289,6 +289,37 @@ On Linux, Claude Code keeps its credentials in `<config dir>/.credentials.json` 
 - **Editors.** IDE extensions may ignore `CLAUDE_CONFIG_DIR`.
 - **`.csw` and `rename`.** Renaming a profile does not edit `.csw` files that name it or already-running shells.
 
+## Alternatives
+
+Several tools solve the "one machine, several Claude Code accounts" problem. The table compares csw with the ones closest to it, based on what each project's README documents as of 2026-10-24. A dash means the README does not document the feature, not that it is missing. Corrections are welcome.
+
+| | csw | [claude-switch](https://github.com/SaschaHeyer/claude-switch) | [Cloak](https://github.com/synth1s/cloak) | [claudectx](https://github.com/foxj77/claudectx) | [claude-account](https://github.com/hamzarehmandeveloper/claude-account) | [swapdex](https://github.com/youdie006/swapdex) |
+|---|---|---|---|---|---|---|
+| Implementation | Zig, one static binary | Bash script, needs `gum` | Node.js 20+ (npm) | Go | Rust | Rust |
+| Install | install script, Homebrew tap, deb/rpm, Nix | install script | `npm install -g` | Homebrew tap, `make install` | release archives, build from source | Homebrew, npm, cargo |
+| Isolation | `CLAUDE_CONFIG_DIR` per profile, plus a switchable default | `CLAUDE_CONFIG_DIR` per profile | `CLAUDE_CONFIG_DIR` per profile | switches config profiles, `run` for one session | `CLAUDE_CONFIG_DIR` per profile through a `claude` wrapper | `CLAUDE_CONFIG_DIR` slots through a shim and local proxy |
+| Concurrent terminals | yes | yes | yes | yes, with `run` | yes | yes |
+| Per-directory binding | yes (`.csw` and shell hook) | - | yes (`bind`) | - | - | - |
+| Claude Desktop | yes (`--desktop`, `--all`) | - | - | - | - | - |
+| Shell completions | zsh, bash, fish | - | - | bash, zsh, fish | - | - |
+| Diagnostics | `doctor` | - | - | - | - | `doctor` |
+| Rename a profile | yes | - | yes | - | - | - |
+| Release integrity | checksums verified by the installer and `csw update`, build provenance attestations | - | - | - | checksums | - |
+| Platforms | macOS, Linux (WSL on Windows) | macOS, Linux | where Node runs | macOS, Linux, Windows | macOS, Linux | see its README |
+| License | MIT | MIT | MIT | MIT | MIT | MIT |
+
+Where the others are a better fit:
+
+- **claudectx** also manages settings, API providers (Bedrock, OpenRouter and others), MCP servers and `CLAUDE.md` per profile, with backups, rollback and JSON export and import. It runs on Windows.
+- **claude-switch (SaschaHeyer)** shares skills, settings, `CLAUDE.md` and plugins across profiles by symlink and can sync sessions between profiles to continue after a usage limit.
+- **Cloak** installs with one `npm` command and has the same bind and rename ideas, for people who already live in Node.
+- **swapdex** covers several CLIs (Claude Code, Codex, Gemini CLI, Antigravity) and reports local usage and quota.
+- **claude-account** is a small Rust wrapper that leaves login, logout and token refresh entirely to Claude Code.
+
+Other projects worth a look, not evaluated here: [clauth](https://crates.io/crates/clauth) (terminal UI with usage monitoring and optional auto-switching), [ccsw](https://crates.io/crates/ccsw), [claude-account-switch](https://github.com/ftery0/claude-account-switch) and [ccswitch](https://github.com/binoyPeries/ccswitch).
+
+What csw is built for: macOS first, a small dependency-free binary, Claude Desktop alongside Claude Code, and a Keychain flow that keeps the login of each profile in the entry Claude Code itself uses for that config directory.
+
 ## Development
 
 ```bash
