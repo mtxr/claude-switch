@@ -300,22 +300,27 @@ Several tools solve the "one machine, several Claude Code accounts" problem. The
 - **You can verify what you install.** Every release ships `SHA256SUMS` and build provenance attestations, and both the installer and `csw update` check the checksum before replacing anything.
 - **`csw doctor` explains what is wrong** instead of leaving you to read config directories by hand.
 
-The table is based on what each project's README documents as of 2026-10-24. A dash means the README does not document the feature, not that it is missing. Corrections are welcome.
+The table is based on what each project's README documents as of 2026-10-24. ✅ means documented, ➖ means the README does not mention it (not that it is missing). Corrections are welcome.
 
 | | csw | [claude-switch](https://github.com/SaschaHeyer/claude-switch) | [Cloak](https://github.com/synth1s/cloak) | [claudectx](https://github.com/foxj77/claudectx) | [claude-account](https://github.com/hamzarehmandeveloper/claude-account) | [swapdex](https://github.com/youdie006/swapdex) |
-|---|---|---|---|---|---|---|
-| Implementation | **Zig, one static binary** | Bash script, needs `gum` | Node.js 20+ (npm) | Go | Rust | Rust |
-| Install | **install script, Homebrew tap, deb/rpm, Nix** | install script | `npm install -g` | Homebrew tap, `make install` | release archives, build from source | Homebrew, npm, cargo |
-| Isolation | **`CLAUDE_CONFIG_DIR` per profile, plus a switchable default** | `CLAUDE_CONFIG_DIR` per profile | `CLAUDE_CONFIG_DIR` per profile | switches config profiles, `run` for one session | `CLAUDE_CONFIG_DIR` per profile through a `claude` wrapper | `CLAUDE_CONFIG_DIR` slots through a shim and local proxy |
-| Concurrent terminals | yes | yes | yes | yes, with `run` | yes | yes |
-| Per-directory binding | **yes (`.csw` and shell hook)** | - | yes (`bind`) | - | - | - |
-| Claude Desktop | **yes (`--desktop`, `--all`)** | - | - | - | - | - |
-| Shell completions | **zsh, bash, fish, man page** | - | - | bash, zsh, fish | - | - |
-| Diagnostics | **`doctor`** | - | - | - | - | `doctor` |
-| Rename a profile | yes | - | yes | - | - | - |
-| Release integrity | **checksums verified by the installer and `csw update`, build provenance attestations** | - | - | - | checksums | - |
-| Platforms | macOS, Linux (WSL on Windows) | macOS, Linux | where Node runs | macOS, Linux, Windows | macOS, Linux | see its README |
-| License | MIT | MIT | MIT | MIT | MIT | MIT |
+|---|:---:|:---:|:---:|:---:|:---:|:---:|
+| Language | ⚡ Zig | 🐚 Bash | 🟩 Node.js | 🐹 Go | 🦀 Rust | 🦀 Rust |
+| Single static binary | ✅ | ➖ needs `gum` | ➖ needs Node 20+ | ✅ | ✅ | ✅ |
+| Separate config per profile | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Switchable default profile | ✅ | ➖ | ➖ | ✅ | ➖ | ➖ |
+| Concurrent terminals | ✅ | ✅ | ✅ | ✅ `run` | ✅ | ✅ |
+| Per-directory binding | ✅ `.csw` + hook | ➖ | ✅ `bind` | ➖ | ➖ | ➖ |
+| Claude Desktop | ✅ | ➖ | ➖ | ➖ | ➖ | ➖ |
+| Shell completions | ✅ zsh, bash, fish | ➖ | ➖ | ✅ bash, zsh, fish | ➖ | ➖ |
+| Man page | ✅ | ➖ | ➖ | ➖ | ➖ | ➖ |
+| Diagnostics (`doctor`) | ✅ | ➖ | ➖ | ➖ | ➖ | ✅ |
+| Rename a profile | ✅ | ➖ | ✅ | ➖ | ➖ | ➖ |
+| No wrapper, shim or proxy | ✅ | ✅ | ✅ | ✅ | ➖ wrapper | ➖ shim + proxy |
+| Checksum-verified install and update | ✅ | ➖ | ➖ | ➖ | ✅ checksums | ➖ |
+| Build provenance attestations | ✅ | ➖ | ➖ | ➖ | ➖ | ➖ |
+| macOS | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Linux | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Windows | ➖ WSL | ➖ | ✅ | ✅ | ➖ | ➖ |
 
 Where the others go further: claudectx also manages API providers, MCP servers and `CLAUDE.md` per profile and runs on Windows. claude-switch (SaschaHeyer) shares skills and plugins across profiles and syncs sessions. swapdex covers several CLIs and reports usage and quota. csw stays focused on switching accounts safely.
 
