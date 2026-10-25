@@ -30,6 +30,19 @@ jobs:
       TAG: ${{ inputs.tag }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.publish && format('refs/tags/{0}', inputs.tag) || github.sha }}
+
+      - name: Verify the checkout is the release tag commit
+        if: inputs.publish
+        shell: bash
+        run: |
+          head_commit="$(git rev-parse HEAD)"
+          tag_commit="$(git rev-list -n 1 "refs/tags/$TAG")"
+          if [ "$head_commit" != "$tag_commit" ]; then
+            echo "::error::checkout $head_commit does not match $TAG at $tag_commit"
+            exit 1
+          fi
 
       - name: Install Zig 0.17.0
         uses: mlugg/setup-zig@v2
@@ -79,6 +92,19 @@ jobs:
       TAG: ${{ inputs.tag }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.publish && format('refs/tags/{0}', inputs.tag) || github.sha }}
+
+      - name: Verify the checkout is the release tag commit
+        if: inputs.publish
+        shell: bash
+        run: |
+          head_commit="$(git rev-parse HEAD)"
+          tag_commit="$(git rev-list -n 1 "refs/tags/$TAG")"
+          if [ "$head_commit" != "$tag_commit" ]; then
+            echo "::error::checkout $head_commit does not match $TAG at $tag_commit"
+            exit 1
+          fi
 
       - name: Download Linux binaries from the release
         if: inputs.publish
