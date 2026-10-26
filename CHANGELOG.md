@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.1](https://github.com/mtxr/claude-switch/compare/v1.0.0...v1.0.1) (2026-10-26)
+
+
+### Bug Fixes
+
+* close three known limitations (Keychain argv, Desktop force-quit, inner config link) ([#44](https://github.com/mtxr/claude-switch/issues/44)) ([bce9fb9](https://github.com/mtxr/claude-switch/commit/bce9fb9901075628719ab97a309695f8baa6bb57))
+
 ## [1.0.0](https://github.com/mtxr/claude-switch/compare/v0.2.6...v1.0.0) (2026-10-24)
 
 
