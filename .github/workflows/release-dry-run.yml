@@ -47,6 +47,7 @@ jobs:
       - name: Render the Homebrew formula and the PKGBUILD
         run: |
           packaging/render.sh homebrew 0.0.0 dist/SHA256SUMS > /dev/null
+          packaging/render.sh nix 0.0.0 dist/SHA256SUMS | python3 -m json.tool > /dev/null
           packaging/render.sh aur 0.0.0 dist/SHA256SUMS > /dev/null
 
       - name: Smoke test the Linux binary in containers

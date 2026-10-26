@@ -18,8 +18,11 @@ jobs:
 
       - uses: DeterminateSystems/nix-installer-action@v20
 
-      - name: Build
+      - name: Build the prebuilt package
         run: nix build --print-build-logs
+
+      - name: Build from source
+        run: nix build .#csw --print-build-logs
 
       - name: Flake check
         run: nix flake check --print-build-logs

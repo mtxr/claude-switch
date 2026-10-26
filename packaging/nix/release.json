@@ -1,0 +1,9 @@
+{
+  "version": "1.0.0",
+  "assets": {
+    "aarch64-darwin": { "name": "csw-aarch64-apple-darwin", "sha256": "6801cdea24a619c3cbdf7c72b7ff8db8e7bc6a7dc5403fbf473bb4f2bc5bb85a" },
+    "x86_64-darwin": { "name": "csw-x86_64-apple-darwin", "sha256": "17a42387d64e2bdad8d5734755907b3f613c6e2f056c6a4113bcb716d1d8168b" },
+    "aarch64-linux": { "name": "csw-aarch64-unknown-linux-musl", "sha256": "2b1e49eaad7f95384208da18b9d02f47c91f544722b5ae3c46b187da93905fb4" },
+    "x86_64-linux": { "name": "csw-x86_64-unknown-linux-musl", "sha256": "6d7e9c1e36c5ce524ed0443a59c74fc7ceb2f7d05fd694d247314bf99e49a1f6" }
+  }
+}

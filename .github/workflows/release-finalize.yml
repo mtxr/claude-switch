@@ -110,3 +110,40 @@ jobs:
             git commit -m "csw $TAG"
             git push
           fi
+
+  update-nix-release:
+    needs: publish-release
+    if: needs.publish-release.outputs.stable == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    env:
+      TAG: ${{ inputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Render the prebuilt release metadata
+        run: |
+          gh release download "$TAG" --repo ${{ github.repository }} --pattern SHA256SUMS --dir .
+          packaging/render.sh nix "${TAG#v}" SHA256SUMS > packaging/nix/release.json
+
+      - name: Open a pull request with the new hashes
+        run: |
+          if git diff --quiet -- packaging/nix/release.json; then
+            echo "Nix release metadata already up to date"
+            exit 0
+          fi
+          branch="chore/nix-release-${TAG#v}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$branch"
+          git add packaging/nix/release.json
+          git commit -m "chore(nix): point csw-bin at $TAG"
+          git push origin "$branch"
+          gh pr create --draft --base main --head "$branch" \
+            --title "chore(nix): point csw-bin at $TAG" \
+            --body "Updates the prebuilt binary hashes used by \`nix run github:${{ github.repository }}\` to $TAG."

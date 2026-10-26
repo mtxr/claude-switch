@@ -1,0 +1,9 @@
+{
+  "version": "@VERSION@",
+  "assets": {
+    "aarch64-darwin": { "name": "csw-aarch64-apple-darwin", "sha256": "@SHA_AARCH64_DARWIN@" },
+    "x86_64-darwin": { "name": "csw-x86_64-apple-darwin", "sha256": "@SHA_X86_64_DARWIN@" },
+    "aarch64-linux": { "name": "csw-aarch64-unknown-linux-musl", "sha256": "@SHA_AARCH64_LINUX@" },
+    "x86_64-linux": { "name": "csw-x86_64-unknown-linux-musl", "sha256": "@SHA_X86_64_LINUX@" }
+  }
+}

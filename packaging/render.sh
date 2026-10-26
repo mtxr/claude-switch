@@ -2,7 +2,7 @@
 set -euo pipefail
 
 if [ "$#" -ne 3 ]; then
-  echo "usage: render.sh <homebrew|aur> <version> <SHA256SUMS>" >&2
+  echo "usage: render.sh <homebrew|aur|nix> <version> <SHA256SUMS>" >&2
   exit 2
 fi
 
@@ -14,6 +14,7 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 case "$kind" in
   homebrew) template="$here/homebrew/csw.rb" ;;
   aur) template="$here/aur/PKGBUILD" ;;
+  nix) template="$here/nix/release.json.in" ;;
   *) echo "unknown kind: $kind" >&2; exit 2 ;;
 esac
 
