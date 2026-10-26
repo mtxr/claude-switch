@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.0](https://github.com/mtxr/claude-switch/compare/v1.1.0...v1.2.0) (2026-10-26)
+
+
+### Features
+
+* **nix:** make csw the prebuilt release binary ([#51](https://github.com/mtxr/claude-switch/issues/51)) ([eb4988c](https://github.com/mtxr/claude-switch/commit/eb4988ced4945a613330f433ad8d2e5008b3dcbe))
+
 ## [1.1.0](https://github.com/mtxr/claude-switch/compare/v1.0.1...v1.1.0) (2026-10-26)
 
 
