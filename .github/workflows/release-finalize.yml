@@ -131,7 +131,7 @@ jobs:
           gh release download "$TAG" --repo ${{ github.repository }} --pattern SHA256SUMS --dir .
           packaging/render.sh nix "${TAG#v}" SHA256SUMS > packaging/nix/release.json
 
-      - name: Open a pull request with the new hashes
+      - name: Open a pull request with the new hashes and squash-merge it
         run: |
           if git diff --quiet -- packaging/nix/release.json; then
             echo "Nix release metadata already up to date"
@@ -144,6 +144,9 @@ jobs:
           git add packaging/nix/release.json
           git commit -m "chore(nix): point the Nix package at $TAG"
           git push origin "$branch"
-          gh pr create --draft --base main --head "$branch" \
-            --title "chore(nix): point the Nix package at $TAG" \
-            --body "Updates the prebuilt binary hashes used by \`nix run github:${{ github.repository }}\` to $TAG."
+          title="chore(nix): point the Nix package at $TAG"
+          url="$(gh pr create --base main --head "$branch" \
+            --title "$title" \
+            --body "Updates the prebuilt binary hashes used by \`nix run github:${{ github.repository }}\` to $TAG.")"
+          # main has no required status checks, so merge right away instead of --auto
+          gh pr merge "$url" --squash --delete-branch --subject "$title"
