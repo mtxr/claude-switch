@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.0](https://github.com/mtxr/claude-switch/compare/v1.0.1...v1.1.0) (2026-10-26)
+
+
+### Features
+
+* open a profile's own Claude Desktop next to the main one with csw desktop ([#49](https://github.com/mtxr/claude-switch/issues/49)) ([061dbe7](https://github.com/mtxr/claude-switch/commit/061dbe79a5037850f0c54024595d50e8c0563fdc))
+
 ## [1.0.1](https://github.com/mtxr/claude-switch/compare/v1.0.0...v1.0.1) (2026-10-26)
 
 
