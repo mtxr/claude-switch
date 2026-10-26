@@ -142,8 +142,8 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -b "$branch"
           git add packaging/nix/release.json
-          git commit -m "chore(nix): point csw-bin at $TAG"
+          git commit -m "chore(nix): point the Nix package at $TAG"
           git push origin "$branch"
           gh pr create --draft --base main --head "$branch" \
-            --title "chore(nix): point csw-bin at $TAG" \
+            --title "chore(nix): point the Nix package at $TAG" \
             --body "Updates the prebuilt binary hashes used by \`nix run github:${{ github.repository }}\` to $TAG."

@@ -22,7 +22,7 @@ jobs:
         run: nix build --print-build-logs
 
       - name: Build from source
-        run: nix build .#csw --print-build-logs
+        run: nix build .#csw-src --print-build-logs
 
       - name: Flake check
         run: nix flake check --print-build-logs

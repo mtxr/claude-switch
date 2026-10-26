@@ -23,7 +23,7 @@
         aarch64-linux = "aarch64-linux-musl";
       };
 
-      mkCsw = { pkgs, zig }:
+      mkCswSrc = { pkgs, zig }:
         let
           target = muslTarget.${pkgs.stdenv.hostPlatform.system} or null;
         in
@@ -64,12 +64,12 @@
 
       release = builtins.fromJSON (builtins.readFile ./packaging/nix/release.json);
 
-      mkCswBin = { pkgs }:
+      mkCsw = { pkgs }:
         let
           asset = release.assets.${pkgs.stdenv.hostPlatform.system};
         in
         pkgs.stdenv.mkDerivation {
-          pname = "csw-bin";
+          pname = "csw";
           version = release.version;
           src = pkgs.fetchurl {
             url = "https://github.com/mtxr/claude-switch/releases/download/v${release.version}/${asset.name}";
@@ -127,7 +127,8 @@
     in
     {
       overlays.default = final: prev: {
-        csw = mkCsw {
+        csw = mkCsw { pkgs = final; };
+        csw-src = mkCswSrc {
           pkgs = final;
           zig = zigFor final.stdenv.hostPlatform.system;
         };
@@ -137,25 +138,25 @@
       let
         pkgs = nixpkgs.legacyPackages.${system};
         zig = zigFor system;
-        csw = mkCsw { inherit pkgs zig; };
-        csw-bin = mkCswBin { inherit pkgs; };
+        csw = mkCsw { inherit pkgs; };
+        csw-src = mkCswSrc { inherit pkgs zig; };
       in
       {
         packages = {
-          inherit csw csw-bin;
-          default = csw-bin;
+          inherit csw csw-src;
+          default = csw;
         };
 
         apps.default = {
           type = "app";
-          program = "${csw-bin}/bin/csw";
-          meta = csw-bin.meta;
-        };
-
-        apps.csw = {
-          type = "app";
           program = "${csw}/bin/csw";
           meta = csw.meta;
+        };
+
+        apps.csw-src = {
+          type = "app";
+          program = "${csw-src}/bin/csw";
+          meta = csw-src.meta;
         };
 
         devShells.default = pkgs.mkShell {
@@ -163,7 +164,7 @@
         };
 
         checks = {
-          inherit csw csw-bin;
+          inherit csw csw-src;
         } // lib.optionalAttrs pkgs.stdenv.hostPlatform.isDarwin {
           tests = mkTests { inherit pkgs zig; };
         };
