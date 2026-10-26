@@ -4,6 +4,7 @@ const std = @import("std");
 const credentials = @import("credentials.zig");
 const desktop = @import("desktop.zig");
 const display = @import("display.zig");
+const isolated = @import("isolated.zig");
 const keychain = @import("keychain.zig");
 const paths = @import("paths.zig");
 const picker = @import("picker.zig");
@@ -137,6 +138,7 @@ fn useCodeIn(gpa: std.mem.Allocator, io: std.Io, h: []const u8, name: []const u8
 }
 
 fn useDesktopIn(gpa: std.mem.Allocator, io: std.Io, h: []const u8, name: []const u8, cur: ?[]const u8) !void {
+    try isolated.refuseWhenOpen(gpa, io, h, name);
     desktop.quit(gpa, io);
     const has_desktop = desktop.hasData(gpa, name);
     try desktop.swap(gpa, cur, name);
@@ -145,7 +147,6 @@ fn useDesktopIn(gpa: std.mem.Allocator, io: std.Io, h: []const u8, name: []const
     const msg = try std.fmt.allocPrint(gpa, "Claude Desktop switched to '{s}'", .{name});
     defer gpa.free(msg);
     display.ok(msg);
-    _ = h;
 }
 
 pub fn cmdNew(gpa: std.mem.Allocator, io: std.Io, name: []const u8, opts: Options) !void {
@@ -255,6 +256,7 @@ pub fn cmdDelete(gpa: std.mem.Allocator, io: std.Io, name_opt: ?[]const u8, opts
         return error.ProfileNotFound;
     }
 
+    if (opts.desktop) try isolated.refuseWhenOpen(gpa, io, h, name);
     if (opts.code) try deleteCodeIn(gpa, io, h, name, p_json, p_dir);
     if (opts.desktop) try deleteDesktopIn(gpa, io, h, d_dir, owns_desktop);
     if (!opts.desktop and desktop.pathExists(gpa, d_dir)) {

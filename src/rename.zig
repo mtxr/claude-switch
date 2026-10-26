@@ -5,6 +5,7 @@ const bind = @import("bind.zig");
 const credentials = @import("credentials.zig");
 const desktop = @import("desktop.zig");
 const display = @import("display.zig");
+const isolated = @import("isolated.zig");
 const keychain = @import("keychain.zig");
 const paths = @import("paths.zig");
 const profile = @import("profile.zig");
@@ -164,6 +165,7 @@ pub fn cmdRename(gpa: std.mem.Allocator, io: std.Io, old: []const u8, new: []con
     const h = try paths.home(gpa);
     defer gpa.free(h);
 
+    if (opts.desktop) try isolated.refuseWhenOpen(gpa, io, h, old);
     const report = renameWithCredentialsIn(gpa, io, h, old, new, opts) catch |e| {
         reportError(old, new, e);
         return e;

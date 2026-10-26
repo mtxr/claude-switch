@@ -28,6 +28,4 @@ Limits that come from the platform or from Claude Code itself:
 - **Desktop quit.** `--desktop` and `--all` ask Claude Desktop to quit, then terminate it and finally kill it if it does not exit, so unsaved state can be lost when Desktop is unresponsive.
 - **Credential size.** Keychain values containing line breaks, or longer than about 4000 bytes, are refused instead of being truncated by `security -i`.
 
-Not implemented yet:
-
-- **Two Desktops at once.** A second Desktop instance on its own data dir (an `--isolated` mode) is a TODO.
+- **`csw desktop` login links.** `claude://` links open in the first Claude Desktop that is running, so sign in by copying the code from the browser and pasting it into the window you opened.

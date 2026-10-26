@@ -8,6 +8,21 @@
 
 The first time a profile is used this way, csw seeds its Keychain entry from the live login if the profile is the active one and that token has not expired. Otherwise run `/login` inside claude once; Claude Code remembers it for that profile.
 
+## Claude Desktop for several accounts at once
+
+`csw use <name> --desktop` swaps the single main Claude Desktop between profiles. To keep two Desktops open, run:
+
+```bash
+csw desktop work
+csw desktop personal
+```
+
+Each one is a separate instance started with `--user-data-dir` pointing at that profile's own data directory (`~/Library/Application Support/Claude.<name>`), so it keeps its own login. Nothing is quit, swapped or made active. macOS only.
+
+- The first time for a profile its window is signed out. Sign in there; login links open in your main Desktop, so copy the code from the browser and paste it into the new window.
+- The profile that currently owns the main Desktop is refused, because its data lives in the main directory. Open Claude normally, or switch the main Desktop to another profile first.
+- While a profile's own Desktop is open, `use --desktop`, `delete --desktop` and `rename --desktop` refuse to touch its data. Quit it first.
+
 ## Per-directory profiles
 
 Bind a directory to a profile and let the shell switch for you:

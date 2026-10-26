@@ -66,7 +66,7 @@ Add `eval "$(csw hook zsh)"` to `~/.zshrc` (bash and fish are supported too) for
 | | |
 |---|---|
 | **Profiles** | `save`, `use`, `new`, `rename`, `delete`, `list`, `pick`. See [usage](docs/usage.md). |
-| **Claude Desktop** | `--desktop` and `--all` move Desktop together with Claude Code. See [usage](docs/usage.md#claude-code-and-claude-desktop). |
+| **Claude Desktop** | `--desktop` and `--all` move Desktop together with Claude Code, and `csw desktop <name>` opens a second Desktop on its own account (macOS). See [usage](docs/usage.md#claude-code-and-claude-desktop) and [profiles](docs/profiles.md#claude-desktop-for-several-accounts-at-once). |
 | **Several terminals** | `run`, `login` and `env` use a profile in one terminal only. See [profiles](docs/profiles.md). |
 | **Per directory** | `.csw` plus the shell hook. See [profiles](docs/profiles.md#per-directory-profiles). |
 | **Diagnostics** | `csw doctor` checks everything csw needs. See [troubleshooting](docs/troubleshooting.md#doctor). |
