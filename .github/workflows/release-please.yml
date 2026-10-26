@@ -39,6 +39,7 @@ jobs:
     needs: [release-please, assets]
     permissions:
       contents: write
+      pull-requests: write
     uses: ./.github/workflows/release-finalize.yml
     with:
       tag: ${{ needs.release-please.outputs.tag_name }}

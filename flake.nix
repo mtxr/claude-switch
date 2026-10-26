@@ -23,7 +23,7 @@
         aarch64-linux = "aarch64-linux-musl";
       };
 
-      mkCsw = { pkgs, zig }:
+      mkCswSrc = { pkgs, zig }:
         let
           target = muslTarget.${pkgs.stdenv.hostPlatform.system} or null;
         in
@@ -62,6 +62,50 @@
           };
         };
 
+      release = builtins.fromJSON (builtins.readFile ./packaging/nix/release.json);
+
+      mkCsw = { pkgs }:
+        let
+          asset = release.assets.${pkgs.stdenv.hostPlatform.system};
+        in
+        pkgs.stdenv.mkDerivation {
+          pname = "csw";
+          version = release.version;
+          src = pkgs.fetchurl {
+            url = "https://github.com/mtxr/claude-switch/releases/download/v${release.version}/${asset.name}";
+            sha256 = asset.sha256;
+          };
+
+          nativeBuildInputs = [ pkgs.installShellFiles ];
+
+          dontUnpack = true;
+          dontConfigure = true;
+          dontBuild = true;
+          dontStrip = true;
+          dontFixup = true;
+
+          installPhase = ''
+            runHook preInstall
+            install -Dm755 $src $out/bin/csw
+            installShellCompletion --cmd csw \
+              --bash <($out/bin/csw completion bash) \
+              --zsh <($out/bin/csw completion zsh) \
+              --fish <($out/bin/csw completion fish)
+            $out/bin/csw man > csw.1
+            installManPage csw.1
+            runHook postInstall
+          '';
+
+          meta = {
+            description = "Switch between Claude Code and Claude Desktop accounts (prebuilt release binary)";
+            homepage = "https://github.com/mtxr/claude-switch";
+            license = lib.licenses.mit;
+            mainProgram = "csw";
+            platforms = builtins.attrNames release.assets;
+            sourceProvenance = [ lib.sourceTypes.binaryNativeCode ];
+          };
+        };
+
       mkTests = { pkgs, zig }:
         pkgs.stdenv.mkDerivation {
           pname = "csw-tests";
@@ -83,7 +127,8 @@
     in
     {
       overlays.default = final: prev: {
-        csw = mkCsw {
+        csw = mkCsw { pkgs = final; };
+        csw-src = mkCswSrc {
           pkgs = final;
           zig = zigFor final.stdenv.hostPlatform.system;
         };
@@ -93,11 +138,12 @@
       let
         pkgs = nixpkgs.legacyPackages.${system};
         zig = zigFor system;
-        csw = mkCsw { inherit pkgs zig; };
+        csw = mkCsw { inherit pkgs; };
+        csw-src = mkCswSrc { inherit pkgs zig; };
       in
       {
         packages = {
-          inherit csw;
+          inherit csw csw-src;
           default = csw;
         };
 
@@ -107,12 +153,18 @@
           meta = csw.meta;
         };
 
+        apps.csw-src = {
+          type = "app";
+          program = "${csw-src}/bin/csw";
+          meta = csw-src.meta;
+        };
+
         devShells.default = pkgs.mkShell {
           packages = [ zig pkgs.skim pkgs.fzf pkgs.sqlite pkgs.pkg-config ];
         };
 
         checks = {
-          inherit csw;
+          inherit csw csw-src;
         } // lib.optionalAttrs pkgs.stdenv.hostPlatform.isDarwin {
           tests = mkTests { inherit pkgs zig; };
         };

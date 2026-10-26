@@ -40,6 +40,7 @@ jobs:
     needs: assets
     permissions:
       contents: write
+      pull-requests: write
     uses: ./.github/workflows/release-finalize.yml
     with:
       tag: ${{ inputs.tag }}
