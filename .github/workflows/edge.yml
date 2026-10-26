@@ -9,6 +9,7 @@ on:
       - build.zig
       - build.zig.zon
       - packaging/**
+      - '!packaging/nix/release.json'
       - install.sh
   workflow_dispatch:
     inputs:

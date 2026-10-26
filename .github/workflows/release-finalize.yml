@@ -131,22 +131,43 @@ jobs:
           gh release download "$TAG" --repo ${{ github.repository }} --pattern SHA256SUMS --dir .
           packaging/render.sh nix "${TAG#v}" SHA256SUMS > packaging/nix/release.json
 
-      - name: Open a pull request with the new hashes and squash-merge it
+      - name: Detect whether the metadata changed
+        id: diff
         run: |
           if git diff --quiet -- packaging/nix/release.json; then
             echo "Nix release metadata already up to date"
-            exit 0
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
+
+      - uses: DeterminateSystems/nix-installer-action@v20
+        if: steps.diff.outputs.changed == 'true'
+
+      # The pull request is opened with GITHUB_TOKEN, so CI does not run on it: validate here instead.
+      - name: Check the new metadata before merging it
+        if: steps.diff.outputs.changed == 'true'
+        run: |
+          nix flake check --all-systems --no-build
+          nix build .#csw --print-build-logs
+          result/bin/csw --version | grep -F "${TAG#v}"
+
+      - name: Open a pull request with the new hashes and squash-merge it
+        if: steps.diff.outputs.changed == 'true'
+        run: |
           branch="chore/nix-release-${TAG#v}"
+          title="chore(nix): point the Nix package at $TAG"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -b "$branch"
           git add packaging/nix/release.json
-          git commit -m "chore(nix): point the Nix package at $TAG"
-          git push origin "$branch"
-          title="chore(nix): point the Nix package at $TAG"
-          url="$(gh pr create --base main --head "$branch" \
-            --title "$title" \
-            --body "Updates the prebuilt binary hashes used by \`nix run github:${{ github.repository }}\` to $TAG.")"
+          git commit -m "$title"
+          git push --force origin "$branch"
+          url="$(gh pr list --head "$branch" --state open --json url -q '.[0].url')"
+          if [ -z "$url" ]; then
+            url="$(gh pr create --base main --head "$branch" \
+              --title "$title" \
+              --body "Updates the prebuilt binary hashes used by \`nix run github:${{ github.repository }}\` to $TAG.")"
+          fi
           # main has no required status checks, so merge right away instead of --auto
           gh pr merge "$url" --squash --delete-branch --subject "$title"
