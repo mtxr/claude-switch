@@ -1,9 +1,9 @@
 Output concurrent.gif
 
 Set Shell "bash"
-Set FontSize 18
-Set Width 1100
-Set Height 360
+Set FontSize 16
+Set Width 1500
+Set Height 420
 Set Padding 20
 Set Theme "Catppuccin Mocha"
 Set TypingSpeed 45ms

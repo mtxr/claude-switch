@@ -6,7 +6,21 @@
 
 **Switch between Claude Code and Claude Desktop accounts without logging out.** `csw` keeps one profile per account, lets several terminals use different accounts at the same time, and picks the account from the directory you are in.
 
-![csw switching accounts: list, use, run and a per-directory binding](docs/demos/demo.gif)
+![csw switching accounts: use, per-directory bindings and run](docs/demos/demo.gif)
+
+### Two accounts at the same time
+
+Each terminal can use a different account, with no logout in between.
+
+![Two terminals running two accounts at once](docs/demos/concurrent.gif)
+
+### Pick the account by directory
+
+Enter a project and its account loads. Leave it and you are back where you were.
+
+![Profiles loaded from the directory](docs/demos/directory.gif)
+
+More: [picker, completions, rename and profile management](docs/demos.md).
 
 ## Why csw
 
