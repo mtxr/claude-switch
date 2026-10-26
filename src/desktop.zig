@@ -96,6 +96,74 @@ pub fn launch(gpa: std.mem.Allocator, io: std.Io) void {
     gpa.free(result.stderr);
 }
 
+const USER_DATA_DIR_FLAG = "--user-data-dir=";
+
+pub fn userDataDirArg(gpa: std.mem.Allocator, dir: []const u8) ![]u8 {
+    return std.fmt.allocPrint(gpa, "{s}{s}", .{ USER_DATA_DIR_FLAG, dir });
+}
+
+/// Regex matching a full command line that ends in `--user-data-dir=<dir>` or
+/// continues with another argument, so `Claude.work` never matches `Claude.work2`.
+pub fn userDataDirPattern(gpa: std.mem.Allocator, dir: []const u8) ![]u8 {
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(gpa);
+    try out.appendSlice(gpa, USER_DATA_DIR_FLAG);
+    for (dir) |ch| {
+        if (std.mem.indexOfScalar(u8, "\\.^$*+?()[]{}|", ch) != null) try out.append(gpa, '\\');
+        try out.append(gpa, ch);
+    }
+    try out.appendSlice(gpa, "( |$)");
+    return out.toOwnedSlice(gpa);
+}
+
+/// Data dir for an isolated Desktop of `name`, created when missing. The
+/// profile that owns the main Desktop is refused: its data is the main dir.
+/// Caller frees.
+pub fn prepareIsolatedIn(gpa: std.mem.Allocator, base: []const u8, name: []const u8) ![]const u8 {
+    if (try ownerIn(gpa, base)) |owner| {
+        defer gpa.free(owner);
+        if (std.mem.eql(u8, owner, name)) return error.ProfileOwnsMainDesktop;
+    }
+    const dir = try paths.desktopProfileDirIn(gpa, base, name);
+    errdefer gpa.free(dir);
+    try mkdirAllC(gpa, dir);
+    return dir;
+}
+
+pub fn isolatedRunning(gpa: std.mem.Allocator, io: std.Io, dir: []const u8) bool {
+    if (comptime !platform.supports_desktop) return false;
+    const pattern = userDataDirPattern(gpa, dir) catch return false;
+    defer gpa.free(pattern);
+    const result = std.process.run(gpa, io, .{
+        .argv = &.{ "pgrep", "-f", "--", pattern },
+        .stdout_limit = .limited(1024),
+        .stderr_limit = .limited(1024),
+    }) catch return false;
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+    return switch (result.term) {
+        .exited => |code| code == 0,
+        else => false,
+    };
+}
+
+pub fn launchIsolated(gpa: std.mem.Allocator, io: std.Io, dir: []const u8) !void {
+    if (comptime !platform.supports_desktop) return error.UnsupportedPlatform;
+    const arg = try userDataDirArg(gpa, dir);
+    defer gpa.free(arg);
+    const result = std.process.run(gpa, io, .{
+        .argv = &.{ "open", "-n", "-a", "Claude", "--args", arg },
+        .stdout_limit = .limited(1024),
+        .stderr_limit = .limited(1024),
+    }) catch return error.LaunchFailed;
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+    switch (result.term) {
+        .exited => |code| if (code != 0) return error.LaunchFailed,
+        else => return error.LaunchFailed,
+    }
+}
+
 /// Profile that owns the main Desktop data dir. The marker lives inside the
 /// dir, so it travels with it when the dir is renamed. Caller frees.
 pub fn ownerIn(gpa: std.mem.Allocator, base: []const u8) !?[]const u8 {
@@ -608,6 +676,42 @@ test "quitWith fails when the app never exits" {
     try std.testing.expectEqual(@as(u64, 9000), fake.pauses);
 }
 
+test "userDataDirArg joins the flag and the dir" {
+    const alloc = std.testing.allocator;
+    const arg = try userDataDirArg(alloc, "/Users/ada/Library/Application Support/Claude.work");
+    defer alloc.free(arg);
+    try std.testing.expectEqualStrings("--user-data-dir=/Users/ada/Library/Application Support/Claude.work", arg);
+}
+
+test "userDataDirPattern escapes regex characters and anchors the dir" {
+    const alloc = std.testing.allocator;
+    const pattern = try userDataDirPattern(alloc, "/a/Claude.work+1");
+    defer alloc.free(pattern);
+    try std.testing.expectEqualStrings("--user-data-dir=/a/Claude\\.work\\+1( |$)", pattern);
+}
+
+test "prepareIsolatedIn creates the profile dir and refuses the main owner" {
+    const alloc = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const base = try tmpBase(alloc, &tmp);
+    defer alloc.free(base);
+
+    const dir = try prepareIsolatedIn(alloc, base, "work");
+    defer alloc.free(dir);
+    try std.testing.expect(pathExists(alloc, dir));
+    try std.testing.expect(std.mem.endsWith(u8, dir, "Claude.work"));
+
+    const main_dir = try paths.desktopDirIn(alloc, base);
+    defer alloc.free(main_dir);
+    try mkdirAllC(alloc, main_dir);
+    writeOwnerIn(alloc, base, "personal");
+    try std.testing.expectError(error.ProfileOwnsMainDesktop, prepareIsolatedIn(alloc, base, "personal"));
+    const other = try prepareIsolatedIn(alloc, base, "oss");
+    defer alloc.free(other);
+    try std.testing.expect(pathExists(alloc, other));
+}
+
 test "Desktop operations are inert without support" {
     if (platform.supports_desktop) return error.SkipZigTest;
     const alloc = std.testing.allocator;
@@ -617,6 +721,8 @@ test "Desktop operations are inert without support" {
     try std.testing.expect(!isRunning(alloc, io));
     quit(alloc, io);
     launch(alloc, io);
+    try std.testing.expect(!isolatedRunning(alloc, io, "/nonexistent"));
+    try std.testing.expectError(error.UnsupportedPlatform, launchIsolated(alloc, io, "/nonexistent"));
     try std.testing.expect(!hasData(alloc, "work"));
     try swap(alloc, null, "work");
     try std.testing.expect(!hasSessionKeyCookie(alloc, "/nonexistent"));

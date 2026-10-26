@@ -11,6 +11,7 @@ const doctor = @import("doctor.zig");
 const keychain = @import("keychain.zig");
 const manpage = @import("manpage.zig");
 const desktop = @import("desktop.zig");
+const isolated = @import("isolated.zig");
 const paths = @import("paths.zig");
 const picker = @import("picker.zig");
 const platform = @import("platform.zig");
@@ -27,6 +28,7 @@ comptime {
     _ = @import("keychain.zig");
     _ = @import("manpage.zig");
     _ = @import("desktop.zig");
+    _ = @import("isolated.zig");
     _ = @import("paths.zig");
     _ = @import("picker.zig");
     _ = @import("platform.zig");
@@ -227,6 +229,10 @@ fn run(gpa: std.mem.Allocator, io: std.Io, args: []const []const u8) !void {
         const name = (try resolveName(gpa, io, given, name_source, cmd, "Run with profile > ")) orelse return;
         defer gpa.free(name);
         return run_cmd.cmdRun(gpa, io, name, forwardedClaudeArgs(args, given != null));
+    } else if (std.mem.eql(u8, cmd, "desktop")) {
+        const name = (try resolveName(gpa, io, given, name_source, cmd, "Open Desktop for profile > ")) orelse return;
+        defer gpa.free(name);
+        return isolated.cmdDesktop(gpa, io, name);
     } else if (std.mem.eql(u8, cmd, "login")) {
         const name = (try resolveName(gpa, io, given, name_source, cmd, "Log in profile > ")) orelse return;
         defer gpa.free(name);
@@ -897,7 +903,7 @@ test "secondPositional skips the product flags" {
 }
 
 test "commandPicksName covers the commands that take a profile" {
-    for ([_][]const u8{ "save", "use", "switch", "run", "login", "env", "bind", "rename" }) |cmd| {
+    for ([_][]const u8{ "save", "use", "switch", "run", "desktop", "login", "env", "bind", "rename" }) |cmd| {
         try std.testing.expect(commandPicksName(cmd));
     }
     for ([_][]const u8{ "new", "delete", "hook", "list", "whoami", "" }) |cmd| {

@@ -30,6 +30,7 @@ pub const all = [_]Command{
     .{ .name = "update", .usage = "update [--edge] [--verbose]", .summary = "Update csw to the latest release (--edge: latest edge build)", .flags = &.{ "--edge", "--verbose" }, .skips_update_check = true },
     .{ .name = "logout-all", .usage = "logout-all", .summary = "Log out and remove all active symlinks", .flags = product_flags },
     .{ .name = "run", .usage = "run [name] [-- args]", .summary = "Run claude with a profile in this terminal only", .arg = .profile, .picks_name = true },
+    .{ .name = "desktop", .usage = "desktop [name]", .summary = "Open Claude Desktop for a profile next to the main one (macOS)", .arg = .profile, .picks_name = true },
     .{ .name = "login", .usage = "login [name]", .summary = "Start claude for a profile and log in once", .arg = .profile, .picks_name = true },
     .{ .name = "env", .usage = "env [name]", .summary = "Print `export CLAUDE_CONFIG_DIR=...` for a profile", .arg = .profile, .picks_name = true, .flags = &.{"--from-cwd"}, .skips_update_check = true },
     .{ .name = "bind", .usage = "bind [name]", .summary = "Bind the current directory to a profile (.csw)", .arg = .profile, .picks_name = true },

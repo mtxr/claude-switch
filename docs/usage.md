@@ -12,6 +12,7 @@ csw pick             Interactive profile picker (sk, fzf or built-in)
 csw update [--edge] [--verbose]  Update csw to the latest release (--edge: latest edge build)
 csw logout-all       Log out and remove all active symlinks
 csw run [name] [-- args]  Run claude with a profile in this terminal only
+csw desktop [name]   Open Claude Desktop for a profile next to the main one (macOS)
 csw login [name]     Start claude for a profile and log in once
 csw env [name]       Print `export CLAUDE_CONFIG_DIR=...` for a profile
 csw bind [name]      Bind the current directory to a profile (.csw)
