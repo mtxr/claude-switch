@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640">
+  <rect width="1280" height="640" fill="#14110f"/>
+  <rect width="1280" height="8" fill="#d97757"/>
+  <text x="80" y="115" font-family="Menlo, Monaco, monospace" font-size="40" font-weight="700" fill="#d97757">csw</text>
+  <text x="1200" y="112" text-anchor="end" font-family="Helvetica, Arial, sans-serif" font-size="26" fill="#6b635b">github.com/mtxr/claude-switch</text>
+  <text x="80" y="200" font-family="Helvetica, Arial, sans-serif" font-size="58" font-weight="700" fill="#f4efe9">cd into a project.</text>
+  <text x="80" y="268" font-family="Helvetica, Arial, sans-serif" font-size="58" font-weight="700" fill="#d97757">Your Claude account follows.</text>
+
+  <!-- card: work -->
+  <rect x="80" y="320" width="520" height="220" rx="16" fill="#201b18" stroke="#d97757" stroke-width="2"/>
+  <g font-family="Menlo, Monaco, monospace">
+    <text x="115" y="375" font-size="30" fill="#6b635b">$</text>
+    <text x="150" y="375" font-size="30" fill="#f4efe9">cd ~/work/api</text>
+    <text x="115" y="420" font-size="24" fill="#6b635b">.csw  →</text>
+  </g>
+  <rect x="115" y="445" width="230" height="64" rx="32" fill="#d97757"/>
+  <circle cx="148" cy="477" r="9" fill="#14110f"/>
+  <text x="170" y="490" font-family="Menlo, Monaco, monospace" font-size="34" font-weight="700" fill="#14110f">work</text>
+  <text x="365" y="485" font-family="Helvetica, Arial, sans-serif" font-size="22" fill="#a8a29a">Code + Desktop</text>
+
+  <!-- card: personal -->
+  <rect x="680" y="320" width="520" height="220" rx="16" fill="#201b18" stroke="#6ab7a8" stroke-width="2"/>
+  <g font-family="Menlo, Monaco, monospace">
+    <text x="715" y="375" font-size="30" fill="#6b635b">$</text>
+    <text x="750" y="375" font-size="30" fill="#f4efe9">cd ~/oss/blog</text>
+    <text x="715" y="420" font-size="24" fill="#6b635b">.csw  →</text>
+  </g>
+  <rect x="715" y="445" width="270" height="64" rx="32" fill="#6ab7a8"/>
+  <circle cx="748" cy="477" r="9" fill="#14110f"/>
+  <text x="770" y="490" font-family="Menlo, Monaco, monospace" font-size="34" font-weight="700" fill="#14110f">personal</text>
+  <text x="1005" y="485" font-family="Helvetica, Arial, sans-serif" font-size="22" fill="#a8a29a">Code + Desktop</text>
+
+  <!-- swap arrows between cards -->
+  <g stroke="#a8a29a" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M612 410 H668 M656 398 L668 410 L656 422"/>
+    <path d="M668 450 H612 M624 438 L612 450 L624 462"/>
+  </g>
+  <text x="80" y="595" font-family="Helvetica, Arial, sans-serif" font-size="26" fill="#a8a29a">Switch Claude Code and Desktop accounts without logging out.</text>
+</svg>
