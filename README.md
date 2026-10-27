@@ -4,7 +4,7 @@
 [![CI](https://github.com/mtxr/claude-switch/actions/workflows/ci.yml/badge.svg)](https://github.com/mtxr/claude-switch/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-**Hit your rate limit? Switch Claude accounts in one command, without logging out.** Works for Claude Code and Claude Desktop. `csw` keeps one profile per account, lets several terminals use different accounts at the same time, and picks the account from the directory you are in.
+**Use multiple Claude accounts, work and personal, without ever logging out.** Works for Claude Code and Claude Desktop. `csw` keeps one profile per account, lets several terminals use different accounts at the same time, and picks the account from the directory you are in.
 
 ![csw switching accounts: use, per-directory bindings and run](docs/demos/demo.gif)
 
