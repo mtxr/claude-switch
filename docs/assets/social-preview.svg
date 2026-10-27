@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640">
+  <rect width="1280" height="640" fill="#14110f"/>
+  <rect x="0" y="0" width="1280" height="8" fill="#d97757"/>
+  <text x="80" y="170" font-family="Menlo, Monaco, monospace" font-size="96" font-weight="700" fill="#f4efe9">csw</text>
+  <text x="80" y="250" font-family="Helvetica, Arial, sans-serif" font-size="44" font-weight="700" fill="#d97757">Switch Claude accounts</text>
+  <text x="80" y="305" font-family="Helvetica, Arial, sans-serif" font-size="44" font-weight="700" fill="#f4efe9">without logging out.</text>
+  <text x="80" y="370" font-family="Helvetica, Arial, sans-serif" font-size="28" fill="#a8a29a">Claude Code + Claude Desktop · per-directory profiles</text>
+  <text x="80" y="408" font-family="Helvetica, Arial, sans-serif" font-size="28" fill="#a8a29a">Concurrent terminals · one static binary</text>
+  <rect x="80" y="450" width="1120" height="130" rx="14" fill="#201b18" stroke="#3a322d"/>
+  <g font-family="Menlo, Monaco, monospace" font-size="30">
+    <text x="115" y="505" fill="#6b635b">$</text><text x="150" y="505" fill="#f4efe9">csw use work --all</text>
+    <text x="115" y="552" fill="#6b635b">$</text><text x="150" y="552" fill="#f4efe9">cd ~/client &amp;&amp; csw bind personal</text>
+  </g>
+  <text x="1200" y="170" text-anchor="end" font-family="Helvetica, Arial, sans-serif" font-size="28" fill="#6b635b">github.com/mtxr/claude-switch</text>
+</svg>
