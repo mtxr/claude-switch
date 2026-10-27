@@ -148,7 +148,6 @@ jobs:
       - name: Check the new metadata before merging it
         if: steps.diff.outputs.changed == 'true'
         run: |
-          # x86_64-darwin is left out: the locked nixpkgs refuses to evaluate it
           for system in aarch64-darwin aarch64-linux x86_64-linux; do
             nix eval --raw ".#packages.$system.csw.drvPath"
           done
