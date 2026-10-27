@@ -29,7 +29,7 @@ Grab the binary for your platform from [Releases](https://github.com/mtxr/claude
 |---|---|
 | Homebrew (macOS and Linux) | `brew install mtxr/tap/csw` (`mtxr/tap/claude-switch` is an alias) |
 | mise (macOS and Linux) | `mise use -g github:mtxr/claude-switch` |
-| Nix (macOS and Linux) | `nix run github:mtxr/claude-switch` or `nix profile install github:mtxr/claude-switch`. This fetches the latest release binary (hash pinned in `packaging/nix/release.json`, so no compile). To build from source use `nix run github:mtxr/claude-switch#csw-src` |
+| Nix (Apple Silicon macOS and Linux; Intel Macs are not supported) | `nix run github:mtxr/claude-switch` or `nix profile install github:mtxr/claude-switch`. This fetches the latest release binary (hash pinned in `packaging/nix/release.json`, so no compile). To build from source use `nix run github:mtxr/claude-switch#csw-src` |
 | Debian, Ubuntu | `sudo apt install ./csw_<version>_<amd64\|arm64>.deb` from [Releases](https://github.com/mtxr/claude-switch/releases) |
 | Fedora, RHEL | `sudo dnf install ./csw-<version>-1.<x86_64\|aarch64>.rpm` from Releases |
 
