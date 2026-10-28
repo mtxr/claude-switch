@@ -28,6 +28,7 @@ class Csw < Formula
 
   def install
     bin.install Dir["csw-*"].first => "csw"
+    chmod 0755, bin/"csw"
     bin.install_symlink "csw" => "claude-switch"
     (bash_completion/"csw").write Utils.safe_popen_read(bin/"csw", "completion", "bash")
     (zsh_completion/"_csw").write Utils.safe_popen_read(bin/"csw", "completion", "zsh")
