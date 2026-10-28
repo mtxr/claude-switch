@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.1](https://github.com/mtxr/claude-switch/compare/v1.2.0...v1.2.1) (2026-10-28)
+
+
+### Bug Fixes
+
+* **homebrew:** make the installed csw binary executable ([#57](https://github.com/mtxr/claude-switch/issues/57)) ([75284b0](https://github.com/mtxr/claude-switch/commit/75284b005dd2d51fdffd243e828ebf69cc2c4dce))
+
 ## [1.2.0](https://github.com/mtxr/claude-switch/compare/v1.1.0...v1.2.0) (2026-10-26)
 
 
