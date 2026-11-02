@@ -1,6 +1,6 @@
 pre-commit:
   commands:
-    ruff-fix:
-      glob: "*.py"
-      run: uvx ruff check --fix {staged_files} && uvx ruff format {staged_files}
+    zig-fmt:
+      glob: "*.zig"
+      run: zig fmt {staged_files}
       stage_fixed: true

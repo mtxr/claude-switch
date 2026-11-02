@@ -3,3 +3,5 @@
 # Zig build outputs
 zig-out/
 .zig-cache/
+.context/
+.cache/
