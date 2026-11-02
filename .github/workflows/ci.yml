@@ -5,14 +5,36 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
+  fmt:
+    name: Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Zig 0.17.0
+        uses: mlugg/setup-zig@v2
+        with:
+          version: "0.17.0"
+
+      - name: Check formatting
+        run: zig fmt --check build.zig src
+
   test:
     name: Build & Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, ubuntu-latest]
+        # macos-latest is arm64; macos-15-intel keeps the x86_64 macOS binary covered.
+        os: [macos-latest, macos-15-intel, ubuntu-latest]
     steps:
       - uses: actions/checkout@v4
 
@@ -30,6 +52,13 @@ jobs:
       - name: Test
         run: zig build test
 
-      - name: Cross-compile Linux aarch64
+      # Releases ship ReleaseSmall, which drops runtime safety checks. ReleaseSafe
+      # keeps overflow and bounds checks so the tests can catch those bugs.
+      - name: Test (ReleaseSafe)
+        run: zig build test -Doptimize=ReleaseSafe
+
+      - name: Cross-compile Linux
         if: runner.os == 'Linux'
-        run: zig build -Dtarget=aarch64-linux-musl -Doptimize=ReleaseSmall
+        run: |
+          zig build -Dtarget=x86_64-linux-musl -Doptimize=ReleaseSmall
+          zig build -Dtarget=aarch64-linux-musl -Doptimize=ReleaseSmall
