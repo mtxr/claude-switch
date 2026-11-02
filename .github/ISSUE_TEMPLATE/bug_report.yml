@@ -1,0 +1,51 @@
+name: Bug report
+description: Something in csw does not work as documented
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For security vulnerabilities, do not open an issue. See the [security policy](https://github.com/mtxr/claude-switch/blob/main/SECURITY.md).
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you ran, what you expected and what happened instead.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: csw version
+      description: Output of `csw --version`.
+      placeholder: csw 1.2.0
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: OS and architecture
+      placeholder: macOS 15 arm64, Ubuntu 24.04 x86_64
+    validations:
+      required: true
+  - type: dropdown
+    id: install-method
+    attributes:
+      label: Install method
+      options:
+        - install.sh
+        - Homebrew
+        - Nix
+        - Linux package
+        - Built from source
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: csw doctor output
+      description: Output of `csw doctor`. Review it and remove tokens, emails and anything else sensitive before pasting. Never paste credentials or Keychain contents.
+      render: text
+    validations:
+      required: true
