@@ -4,6 +4,7 @@ const std = @import("std");
 const bind = @import("bind.zig");
 const credentials = @import("credentials.zig");
 const desktop = @import("desktop.zig");
+const layout = @import("layout.zig");
 const keychain = @import("keychain.zig");
 const paths = @import("paths.zig");
 const platform = @import("platform.zig");
@@ -131,34 +132,43 @@ fn isDirectory(gpa: std.mem.Allocator, base: []const u8, name: []const u8) bool 
     return true;
 }
 
-/// Profile files on disk: directories, orphan directories and inner config links.
+/// Profile files on disk: orphan directories, configs still stored the old way
+/// and the home config link.
 pub fn fileFindingsIn(gpa: std.mem.Allocator, base: []const u8, profiles: []const []const u8, report: *Report) !void {
-    var no_dir: std.ArrayList([]const u8) = .empty;
-    defer no_dir.deinit(gpa);
-    var stale_inner: std.ArrayList([]const u8) = .empty;
-    defer stale_inner.deinit(gpa);
-
-    for (profiles) |name| {
-        const dir = try paths.profileDirIn(gpa, base, name);
-        defer gpa.free(dir);
-        if (!desktop.pathExists(gpa, dir)) {
-            try no_dir.append(gpa, name);
-            continue;
-        }
-        const inner = try std.fs.path.join(gpa, &.{ dir, ".claude.json" });
-        defer gpa.free(inner);
-        if (desktop.pathExists(gpa, inner) and !desktop.isSymlink(gpa, inner)) try stale_inner.append(gpa, name);
-    }
-
     const orphans = try orphanDirsIn(gpa, base, profiles);
     defer {
         for (orphans) |o| gpa.free(o);
         gpa.free(orphans);
     }
+    const old_style = try layout.legacyNamesIn(gpa, base);
+    defer layout.freeNames(gpa, old_style);
 
-    try namesFinding(gpa, report, "Profile directories", "every profile has its directory", "profile json without a directory (run: csw use <name>)", no_dir.items);
-    try namesFinding(gpa, report, "Orphan directories", "none", "~/.claude.<name>/ without ~/.claude.<name>.json", orphans);
-    try namesFinding(gpa, report, "Inner .claude.json", "linked to the profile json", "regular file instead of a link, so csw will not see its updates", stale_inner.items);
+    try namesFinding(gpa, report, "Orphan directories", "none", "~/.claude.<name>/ without a .claude.json", orphans);
+    try namesFinding(gpa, report, "Old-style configs", "none", "~/.claude.<name>.json outside its directory (any csw command moves it in)", old_style);
+    try homeLinkFinding(gpa, base, report);
+}
+
+/// `~/.claude.json` should follow the active profile. Tools that do not use
+/// CLAUDE_CONFIG_DIR read it, and Claude Code replaces it with a regular file when it saves.
+fn homeLinkFinding(gpa: std.mem.Allocator, base: []const u8, report: *Report) !void {
+    const active = (try layout.activeIn(gpa, base)) orelse return;
+    defer gpa.free(active);
+
+    const outer = try paths.claudeJsonIn(gpa, base);
+    defer gpa.free(outer);
+
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    if (desktop.readLinkC(gpa, outer, &buf)) |n| {
+        if (std.mem.eql(u8, buf[0..n], layout.OUTER_LINK_TARGET)) {
+            return report.add(gpa, .ok, "Home config", "~/.claude.json follows the active profile '{s}'", .{active});
+        }
+        return report.add(gpa, .warn, "Home config", "~/.claude.json is a link to {s} instead of the active profile '{s}'", .{ buf[0..n], active });
+    } else |_| {}
+
+    if (desktop.pathExists(gpa, outer)) {
+        return report.add(gpa, .warn, "Home config", "~/.claude.json is a regular file, so tools without CLAUDE_CONFIG_DIR read a copy of '{s}' that csw does not see (any csw command repairs it)", .{active});
+    }
+    try report.add(gpa, .warn, "Home config", "~/.claude.json is missing while '{s}' is active (any csw command repairs it)", .{active});
 }
 
 pub fn loginFindingsFrom(gpa: std.mem.Allocator, report: *Report, profiles: []const []const u8, has_login: []const bool, has_legacy: []const bool) !void {
@@ -269,8 +279,8 @@ test "classifyConfigDirIn tells profiles, missing profiles and foreign dirs apar
 
     try std.testing.expectEqual(ConfigDirKind.unset, classifyConfigDirIn(alloc, base, null));
 
-    try touchIn(&tmp, ".claude.work.json");
     try mkdirIn(&tmp, ".claude.work");
+    try touchIn(&tmp, ".claude.work/.claude.json");
     const work = try paths.profileDirIn(alloc, base, "work");
     defer alloc.free(work);
     try std.testing.expectEqualStrings("work", classifyConfigDirIn(alloc, base, work).profile);
@@ -279,7 +289,7 @@ test "classifyConfigDirIn tells profiles, missing profiles and foreign dirs apar
     defer alloc.free(ghost);
     try std.testing.expectEqualStrings("ghost", classifyConfigDirIn(alloc, base, ghost).missing_profile);
 
-    try touchIn(&tmp, ".claude.half.json");
+    try mkdirIn(&tmp, ".claude.half");
     const half = try paths.profileDirIn(alloc, base, "half");
     defer alloc.free(half);
     try std.testing.expectEqualStrings("half", classifyConfigDirIn(alloc, base, half).missing_profile);
@@ -313,34 +323,76 @@ test "overlapFinding stays silent without data and explains both cases" {
     try std.testing.expect(std.mem.indexOf(u8, report.items.items[1].detail, "diverged") != null);
 }
 
-test "fileFindingsIn flags missing dirs, orphan dirs and stale inner configs" {
+test "fileFindingsIn flags orphan dirs and configs stored the old way" {
     const alloc = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const base = try tmpBase(alloc, &tmp);
     defer alloc.free(base);
 
-    try touchIn(&tmp, ".claude.good.json");
     try mkdirIn(&tmp, ".claude.good");
-    try touchIn(&tmp, ".claude.nodir.json");
-    try touchIn(&tmp, ".claude.stale.json");
-    try mkdirIn(&tmp, ".claude.stale");
-    try touchIn(&tmp, ".claude.stale/.claude.json");
+    try touchIn(&tmp, ".claude.good/.claude.json");
     try mkdirIn(&tmp, ".claude.orphan");
+    try touchIn(&tmp, ".claude.old.json");
     try touchIn(&tmp, ".claude.json.backup");
     try touchIn(&tmp, ".claude.afile");
 
-    const profiles: []const []const u8 = &.{ "good", "nodir", "stale" };
     var report: Report = .{};
     defer report.deinit(alloc);
-    try fileFindingsIn(alloc, base, profiles, &report);
-    try expectFinding(report, "Profile directories", .warn, "nodir");
+    try fileFindingsIn(alloc, base, &.{"good"}, &report);
     try expectFinding(report, "Orphan directories", .warn, "orphan");
-    try expectFinding(report, "Inner .claude.json", .warn, "stale");
-    const orphan_detail = report.items.items[1].detail;
+    try expectFinding(report, "Old-style configs", .warn, "old");
+    const orphan_detail = report.items.items[0].detail;
     try std.testing.expect(std.mem.endsWith(u8, orphan_detail, ": orphan"));
     try std.testing.expect(std.mem.indexOf(u8, orphan_detail, "afile") == null);
     try std.testing.expect(std.mem.indexOf(u8, orphan_detail, "backup") == null);
+}
+
+test "fileFindingsIn reports the state of ~/.claude.json" {
+    const alloc = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const base = try tmpBase(alloc, &tmp);
+    defer alloc.free(base);
+
+    var quiet: Report = .{};
+    defer quiet.deinit(alloc);
+    try fileFindingsIn(alloc, base, &.{}, &quiet);
+    for (quiet.items.items) |item| try std.testing.expect(!std.mem.eql(u8, item.label, "Home config"));
+
+    try mkdirIn(&tmp, ".claude.work");
+    try touchIn(&tmp, ".claude.work/.claude.json");
+    const dir = try paths.profileDirIn(alloc, base, "work");
+    defer alloc.free(dir);
+    const dir_z = try alloc.dupeSentinel(u8, dir, 0);
+    defer alloc.free(dir_z);
+    const cd = try paths.claudeDirIn(alloc, base);
+    defer alloc.free(cd);
+    const cd_z = try alloc.dupeSentinel(u8, cd, 0);
+    defer alloc.free(cd_z);
+    try std.testing.expectEqual(@as(c_int, 0), std.c.symlink(dir_z, cd_z));
+
+    var missing: Report = .{};
+    defer missing.deinit(alloc);
+    try fileFindingsIn(alloc, base, &.{"work"}, &missing);
+    try expectFinding(missing, "Home config", .warn, "missing");
+
+    try touchIn(&tmp, ".claude.json");
+    var regular: Report = .{};
+    defer regular.deinit(alloc);
+    try fileFindingsIn(alloc, base, &.{"work"}, &regular);
+    try expectFinding(regular, "Home config", .warn, "regular file");
+
+    const cj = try paths.claudeJsonIn(alloc, base);
+    defer alloc.free(cj);
+    desktop.deletePathC(alloc, cj);
+    const cj_z = try alloc.dupeSentinel(u8, cj, 0);
+    defer alloc.free(cj_z);
+    try std.testing.expectEqual(@as(c_int, 0), std.c.symlink(layout.OUTER_LINK_TARGET, cj_z));
+    var healthy: Report = .{};
+    defer healthy.deinit(alloc);
+    try fileFindingsIn(alloc, base, &.{"work"}, &healthy);
+    try expectFinding(healthy, "Home config", .ok, "follows the active profile 'work'");
 }
 
 test "fileFindingsIn is clean for a healthy base" {
@@ -350,8 +402,8 @@ test "fileFindingsIn is clean for a healthy base" {
     const base = try tmpBase(alloc, &tmp);
     defer alloc.free(base);
 
-    try touchIn(&tmp, ".claude.good.json");
     try mkdirIn(&tmp, ".claude.good");
+    try touchIn(&tmp, ".claude.good/.claude.json");
 
     var report: Report = .{};
     defer report.deinit(alloc);
@@ -405,8 +457,8 @@ test "overlapFindings compares the per-dir login with the live entry" {
     defer tmp.cleanup();
     const base = try tmpBase(alloc, &tmp);
     defer alloc.free(base);
-    try touchIn(&tmp, ".claude.p.json");
     try mkdirIn(&tmp, ".claude.p");
+    try touchIn(&tmp, ".claude.p/.claude.json");
 
     const dir_service = try credentials.profileService(alloc, base, "p");
     defer alloc.free(dir_service);
@@ -443,8 +495,8 @@ test "shellFindings reports the variable, the binding and the hook" {
     defer tmp.cleanup();
     const base = try tmpBase(alloc, &tmp);
     defer alloc.free(base);
-    try touchIn(&tmp, ".claude.work.json");
     try mkdirIn(&tmp, ".claude.work");
+    try touchIn(&tmp, ".claude.work/.claude.json");
     try mkdirIn(&tmp, "proj");
     try tmp.dir.writeFile(std.Options.debug_io, .{ .sub_path = "proj/.csw", .data = "work\n" });
     const proj = try std.fs.path.join(alloc, &.{ base, "proj" });

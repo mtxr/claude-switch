@@ -4,9 +4,11 @@ const std = @import("std");
 const completion = @import("completion.zig");
 const desktop = @import("desktop.zig");
 const display = @import("display.zig");
+const layout = @import("layout.zig");
 const paths = @import("paths.zig");
 const profile = @import("profile.zig");
 const run = @import("run.zig");
+const testutil = @import("testutil.zig");
 
 pub const BINDING_FILE = ".csw";
 pub const BOUND_VAR = "__CSW_BOUND";
@@ -82,12 +84,12 @@ pub fn cmdEnvFromCwd(gpa: std.mem.Allocator, io: std.Io, syntax: Syntax) !void {
     defer gpa.free(h);
     const cwd = currentDir(gpa) catch return;
     defer gpa.free(cwd);
+    migrateNeededIn(gpa, h, cwd);
     const target = try resolveHookTargetIn(gpa, h, cwd);
     defer if (target) |t| gpa.free(t);
     const bound = envVar(BOUND_VAR);
     const current = envVar(CONFIG_VAR);
     if (target) |dir| {
-        run.ensureInnerConfigIn(gpa, dir) catch {};
         if (isNewExport(dir, bound, current)) {
             if (run.profileNameOfDir(dir)) |name| run.reportCredentials(gpa, io, h, dir, name, .hook) catch {};
         }
@@ -344,6 +346,19 @@ pub fn warningMessage(gpa: std.mem.Allocator, binding: Binding, fallback: ?[]con
     return std.fmt.allocPrint(gpa, "{s} in {s} names profile '{s}', which does not exist; no profile is active", .{ BINDING_FILE, binding.dir, binding.name });
 }
 
+/// Moves in the profiles stored the old way that this prompt can need: the one
+/// a `.csw` names and the active one. Cheap, since it only looks at those two.
+pub fn migrateNeededIn(gpa: std.mem.Allocator, base: []const u8, start: []const u8) void {
+    if (findBindingIn(gpa, start) catch null) |name| {
+        defer gpa.free(name);
+        _ = layout.migrateProfileIn(gpa, base, name) catch false;
+    }
+    if (layout.activeIn(gpa, base) catch null) |name| {
+        defer gpa.free(name);
+        _ = layout.migrateProfileIn(gpa, base, name) catch false;
+    }
+}
+
 pub fn resolveHookTargetIn(gpa: std.mem.Allocator, base: []const u8, start: []const u8) !?[]const u8 {
     if (try resolveTargetIn(gpa, base, start)) |bound| return bound;
     const active = (try profile.currentIn(gpa, base)) orelse return null;
@@ -403,6 +418,19 @@ pub fn currentDir(gpa: std.mem.Allocator) ![]u8 {
 pub fn envVar(name: [*:0]const u8) ?[]const u8 {
     const val = std.c.getenv(name) orelse return null;
     return std.mem.sliceTo(val, 0);
+}
+
+/// Makes `name` the active profile the way `csw use` does: `~/.claude` linked to its directory.
+fn activate(alloc: std.mem.Allocator, base: []const u8, name: []const u8) !void {
+    const dir = try paths.profileDirIn(alloc, base, name);
+    defer alloc.free(dir);
+    const link = try paths.claudeDirIn(alloc, base);
+    defer alloc.free(link);
+    const dir_z = try alloc.dupeSentinel(u8, dir, 0);
+    defer alloc.free(dir_z);
+    const link_z = try alloc.dupeSentinel(u8, link, 0);
+    defer alloc.free(link_z);
+    try std.testing.expectEqual(@as(c_int, 0), std.c.symlink(dir_z, link_z));
 }
 
 fn tmpBase(alloc: std.mem.Allocator, tmp: *std.testing.TmpDir) ![]u8 {
@@ -482,9 +510,7 @@ test "missingBindingIn reports only a dangling nearest binding" {
     try std.testing.expectEqualStrings("ghost", missing.name);
     try std.testing.expectEqualStrings(proj, missing.dir);
 
-    const pj = try paths.profileJsonIn(alloc, base, "ghost");
-    defer alloc.free(pj);
-    try touch(alloc, pj);
+    try testutil.addProfile(alloc, base, "ghost", "");
     try std.testing.expect(try missingBindingIn(alloc, base, proj) == null);
 }
 
@@ -667,9 +693,7 @@ test "bindIn validates the name and profile and writes .csw" {
     try std.testing.expectError(error.InvalidProfileName, bindIn(alloc, base, base, "a/b"));
     try std.testing.expectError(error.ProfileNotFound, bindIn(alloc, base, base, "work"));
 
-    const pj = try paths.profileJsonIn(alloc, base, "work");
-    defer alloc.free(pj);
-    try touch(alloc, pj);
+    try testutil.addProfile(alloc, base, "work", "");
     try bindIn(alloc, base, base, "work");
 
     const found = (try readBindingIn(alloc, base)).?;
@@ -683,9 +707,7 @@ test "bindIn fails in a missing directory" {
     defer tmp.cleanup();
     const base = try tmpBase(alloc, &tmp);
     defer alloc.free(base);
-    const pj = try paths.profileJsonIn(alloc, base, "work");
-    defer alloc.free(pj);
-    try touch(alloc, pj);
+    try testutil.addProfile(alloc, base, "work", "");
     const missing = try std.fs.path.join(alloc, &.{ base, "nope" });
     defer alloc.free(missing);
     try std.testing.expectError(error.WriteFailed, bindIn(alloc, base, missing, "work"));
@@ -761,9 +783,7 @@ test "resolveTargetIn requires an existing profile" {
 
     try std.testing.expect(try resolveTargetIn(alloc, base, proj) == null);
 
-    const pj = try paths.profileJsonIn(alloc, base, "work");
-    defer alloc.free(pj);
-    try touch(alloc, pj);
+    try testutil.addProfile(alloc, base, "work", "");
     const target = (try resolveTargetIn(alloc, base, proj)).?;
     defer alloc.free(target);
     const expected = try paths.profileDirIn(alloc, base, "work");
@@ -789,16 +809,8 @@ test "resolveHookTargetIn falls back to the active profile" {
 
     try std.testing.expect(try resolveHookTargetIn(alloc, base, base) == null);
 
-    const pj = try paths.profileJsonIn(alloc, base, "work");
-    defer alloc.free(pj);
-    try touch(alloc, pj);
-    const link = try paths.claudeJsonIn(alloc, base);
-    defer alloc.free(link);
-    const pj_z = try alloc.dupeSentinel(u8, pj, 0);
-    defer alloc.free(pj_z);
-    const link_z = try alloc.dupeSentinel(u8, link, 0);
-    defer alloc.free(link_z);
-    try std.testing.expectEqual(@as(c_int, 0), std.c.symlink(pj_z, link_z));
+    try testutil.addProfile(alloc, base, "work", "");
+    try activate(alloc, base, "work");
 
     const target = (try resolveHookTargetIn(alloc, base, base)).?;
     defer alloc.free(target);
@@ -814,20 +826,8 @@ test "resolveHookTargetIn prefers a .csw binding over the active profile" {
     const base = try tmpBase(alloc, &tmp);
     defer alloc.free(base);
 
-    for ([_][]const u8{ "work", "home" }) |name| {
-        const pj = try paths.profileJsonIn(alloc, base, name);
-        defer alloc.free(pj);
-        try touch(alloc, pj);
-    }
-    const work_json = try paths.profileJsonIn(alloc, base, "work");
-    defer alloc.free(work_json);
-    const link = try paths.claudeJsonIn(alloc, base);
-    defer alloc.free(link);
-    const work_z = try alloc.dupeSentinel(u8, work_json, 0);
-    defer alloc.free(work_z);
-    const link_z = try alloc.dupeSentinel(u8, link, 0);
-    defer alloc.free(link_z);
-    try std.testing.expectEqual(@as(c_int, 0), std.c.symlink(work_z, link_z));
+    for ([_][]const u8{ "work", "home" }) |name| try testutil.addProfile(alloc, base, name, "");
+    try activate(alloc, base, "work");
 
     const proj = try std.fs.path.join(alloc, &.{ base, "proj" });
     defer alloc.free(proj);
@@ -841,4 +841,34 @@ test "resolveHookTargetIn prefers a .csw binding over the active profile" {
     const expected = try paths.profileDirIn(alloc, base, "home");
     defer alloc.free(expected);
     try std.testing.expectEqualStrings(expected, target);
+}
+
+test "migrateNeededIn moves in the profile a .csw names and the active one" {
+    const alloc = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const base = try tmpBase(alloc, &tmp);
+    defer alloc.free(base);
+
+    try tmp.dir.writeFile(std.Options.debug_io, .{ .sub_path = ".claude.work.json", .data = "{}" });
+    try tmp.dir.writeFile(std.Options.debug_io, .{ .sub_path = ".claude.home.json", .data = "{}" });
+    try tmp.dir.writeFile(std.Options.debug_io, .{ .sub_path = ".claude.other.json", .data = "{}" });
+    try tmp.dir.createDir(std.Options.debug_io, ".claude.home", .default_dir);
+    try activate(alloc, base, "home");
+    const file = try bindingPathIn(alloc, base);
+    defer alloc.free(file);
+    try writeFile(alloc, file, "work\n");
+
+    try std.testing.expect(try resolveTargetIn(alloc, base, base) == null);
+    migrateNeededIn(alloc, base, base);
+
+    const target = (try resolveTargetIn(alloc, base, base)).?;
+    defer alloc.free(target);
+    try std.testing.expect(std.mem.endsWith(u8, target, ".claude.work"));
+    const active = (try resolveHookTargetIn(alloc, base, "/")).?;
+    defer alloc.free(active);
+    try std.testing.expect(std.mem.endsWith(u8, active, ".claude.home"));
+    const other = try paths.legacyProfileJsonIn(alloc, base, "other");
+    defer alloc.free(other);
+    try std.testing.expect(desktop.pathExists(alloc, other));
 }

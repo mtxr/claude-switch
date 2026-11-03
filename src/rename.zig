@@ -17,7 +17,6 @@ const c = @import("c");
 pub const Report = struct {
     code_renamed: bool = false,
     active_relinked: bool = false,
-    inner_relinked: bool = false,
     desktop_renamed: bool = false,
     owner_updated: bool = false,
     owner_dangling: bool = false,
@@ -52,34 +51,15 @@ pub fn checkIn(gpa: std.mem.Allocator, base: []const u8, old: []const u8, new: [
     defer gpa.free(old_json);
     if (!desktop.pathExists(gpa, old_json)) return error.ProfileNotFound;
 
-    const new_json = try paths.profileJsonIn(gpa, base, new);
-    defer gpa.free(new_json);
     const new_dir = try paths.profileDirIn(gpa, base, new);
     defer gpa.free(new_dir);
+    const new_legacy = try paths.legacyProfileJsonIn(gpa, base, new);
+    defer gpa.free(new_legacy);
     const new_desktop = try paths.desktopProfileDirIn(gpa, base, new);
     defer gpa.free(new_desktop);
-    for ([_][]const u8{ new_json, new_dir, new_desktop }) |path| {
+    for ([_][]const u8{ new_dir, new_legacy, new_desktop }) |path| {
         if (desktop.pathExists(gpa, path) or desktop.isSymlink(gpa, path)) return error.ProfileAlreadyExists;
     }
-}
-
-/// Re-points `<dir>/.claude.json` when it is the link csw created to the old profile json.
-fn relinkInner(gpa: std.mem.Allocator, dir: []const u8, old_json: []const u8, new_json: []const u8) !bool {
-    const inner = try std.fs.path.join(gpa, &.{ dir, ".claude.json" });
-    defer gpa.free(inner);
-    if (!desktop.isSymlink(gpa, inner)) return false;
-
-    var buf: [std.fs.max_path_bytes]u8 = undefined;
-    const n = try desktop.readLinkC(gpa, inner, &buf);
-    if (!std.mem.eql(u8, buf[0..n], old_json)) return false;
-
-    desktop.deletePathC(gpa, inner);
-    const target_z = try gpa.dupeSentinel(u8, new_json, 0);
-    defer gpa.free(target_z);
-    const inner_z = try gpa.dupeSentinel(u8, inner, 0);
-    defer gpa.free(inner_z);
-    if (std.c.symlink(target_z, inner_z) != 0) return error.SymlinkFailed;
-    return true;
 }
 
 /// Renames the files and Desktop data of a profile inside `base`. On a
@@ -89,10 +69,6 @@ pub fn renameIn(gpa: std.mem.Allocator, base: []const u8, old: []const u8, new: 
 
     var report: Report = .{};
 
-    const old_json = try paths.profileJsonIn(gpa, base, old);
-    defer gpa.free(old_json);
-    const new_json = try paths.profileJsonIn(gpa, base, new);
-    defer gpa.free(new_json);
     const old_dir = try paths.profileDirIn(gpa, base, old);
     defer gpa.free(old_dir);
     const new_dir = try paths.profileDirIn(gpa, base, new);
@@ -108,19 +84,12 @@ pub fn renameIn(gpa: std.mem.Allocator, base: []const u8, old: []const u8, new: 
 
     errdefer if (was_active) profile.switchLinksIn(gpa, base, old) catch {};
 
-    var json_moved = false;
-    errdefer if (json_moved) desktop.renameC(gpa, new_json, old_json) catch {};
     var dir_moved = false;
     errdefer if (dir_moved) desktop.renameC(gpa, new_dir, old_dir) catch {};
 
     if (opts.code) {
-        try desktop.renameC(gpa, old_json, new_json);
-        json_moved = true;
-        if (desktop.pathExists(gpa, old_dir)) {
-            try desktop.renameC(gpa, old_dir, new_dir);
-            dir_moved = true;
-            report.inner_relinked = try relinkInner(gpa, new_dir, old_json, new_json);
-        }
+        try desktop.renameC(gpa, old_dir, new_dir);
+        dir_moved = true;
         report.code_renamed = true;
         if (was_active) {
             try profile.switchLinksIn(gpa, base, new);
@@ -244,12 +213,12 @@ const Fixture = struct {
     }
 
     fn addProfile(self: Fixture, alloc: std.mem.Allocator, name: []const u8) !void {
-        const json = try paths.profileJsonIn(alloc, self.base, name);
-        defer alloc.free(json);
-        try touch(alloc, json);
         const dir = try paths.profileDirIn(alloc, self.base, name);
         defer alloc.free(dir);
         try desktop.mkdirAllC(alloc, dir);
+        const json = try paths.profileJsonIn(alloc, self.base, name);
+        defer alloc.free(json);
+        try touch(alloc, json);
     }
 
     fn activate(self: Fixture, alloc: std.mem.Allocator, name: []const u8) !void {
@@ -305,74 +274,35 @@ test "checkIn refuses a new name that already has Desktop data or a dangling dir
     try std.testing.expectError(error.ProfileAlreadyExists, checkIn(alloc, fx.base, "work", "job"));
 }
 
-test "renameIn moves the json and dir and fixes the inner link" {
+test "renameIn moves the directory with the config inside" {
     const alloc = std.testing.allocator;
     var fx = try Fixture.init(alloc);
     defer fx.deinit(alloc);
     try fx.addProfile(alloc, "work");
 
-    const old_json = try paths.profileJsonIn(alloc, fx.base, "work");
-    defer alloc.free(old_json);
-    const old_dir = try paths.profileDirIn(alloc, fx.base, "work");
-    defer alloc.free(old_dir);
-    const inner = try std.fs.path.join(alloc, &.{ old_dir, ".claude.json" });
-    defer alloc.free(inner);
-    try symlinkTo(alloc, old_json, inner);
-
     const report = try renameIn(alloc, fx.base, "work", "job", .{});
     try std.testing.expect(report.code_renamed);
-    try std.testing.expect(report.inner_relinked);
     try std.testing.expect(!report.active_relinked);
-    try std.testing.expect(!try fx.has(alloc, ".claude.work.json"));
     try std.testing.expect(!try fx.has(alloc, ".claude.work"));
-    try std.testing.expect(try fx.has(alloc, ".claude.job.json"));
+    try std.testing.expect(try fx.has(alloc, ".claude.job/.claude.json"));
 
     const new_json = try paths.profileJsonIn(alloc, fx.base, "job");
     defer alloc.free(new_json);
-    const new_inner = try std.fs.path.join(alloc, &.{ fx.base, ".claude.job", ".claude.json" });
-    defer alloc.free(new_inner);
-    var buf: [std.fs.max_path_bytes]u8 = undefined;
-    const n = try desktop.readLinkC(alloc, new_inner, &buf);
-    try std.testing.expectEqualStrings(new_json, buf[0..n]);
+    try std.testing.expect(!desktop.isSymlink(alloc, new_json));
 }
 
-test "renameIn leaves a regular or foreign inner .claude.json alone" {
+test "renameIn leaves the config file itself untouched" {
     const alloc = std.testing.allocator;
     var fx = try Fixture.init(alloc);
     defer fx.deinit(alloc);
     try fx.addProfile(alloc, "work");
-    try fx.addProfile(alloc, "other");
+    try fx.tmp.dir.writeFile(std.Options.debug_io, .{ .sub_path = ".claude.work/.claude.json", .data = "mine" });
 
-    const other_json = try paths.profileJsonIn(alloc, fx.base, "other");
-    defer alloc.free(other_json);
-    const inner = try std.fs.path.join(alloc, &.{ fx.base, ".claude.work", ".claude.json" });
-    defer alloc.free(inner);
-    try symlinkTo(alloc, other_json, inner);
-    const foreign = try renameIn(alloc, fx.base, "work", "job", .{});
-    try std.testing.expect(!foreign.inner_relinked);
+    _ = try renameIn(alloc, fx.base, "work", "job", .{});
 
-    var fx2 = try Fixture.init(alloc);
-    defer fx2.deinit(alloc);
-    try fx2.addProfile(alloc, "work");
-    const regular = try std.fs.path.join(alloc, &.{ fx2.base, ".claude.work", ".claude.json" });
-    defer alloc.free(regular);
-    try touch(alloc, regular);
-    const plain = try renameIn(alloc, fx2.base, "work", "job", .{});
-    try std.testing.expect(!plain.inner_relinked);
-}
-
-test "renameIn handles a profile whose dir does not exist" {
-    const alloc = std.testing.allocator;
-    var fx = try Fixture.init(alloc);
-    defer fx.deinit(alloc);
-    const json = try paths.profileJsonIn(alloc, fx.base, "work");
-    defer alloc.free(json);
-    try touch(alloc, json);
-
-    const report = try renameIn(alloc, fx.base, "work", "job", .{});
-    try std.testing.expect(report.code_renamed);
-    try std.testing.expect(!report.inner_relinked);
-    try std.testing.expect(try fx.has(alloc, ".claude.job.json"));
+    const content = try fx.tmp.dir.readFileAlloc(std.Options.debug_io, ".claude.job/.claude.json", alloc, .limited(64));
+    defer alloc.free(content);
+    try std.testing.expectEqualStrings("mine", content);
 }
 
 test "renameIn re-links the active profile" {
@@ -399,8 +329,8 @@ test "renameIn rolls back when the new name is invalid or taken" {
 
     try std.testing.expectError(error.ProfileAlreadyExists, renameIn(alloc, fx.base, "work", "job", .{}));
     try std.testing.expectError(error.InvalidNewName, renameIn(alloc, fx.base, "work", "a b", .{}));
-    try std.testing.expect(try fx.has(alloc, ".claude.work.json"));
-    try std.testing.expect(try fx.has(alloc, ".claude.work"));
+    try std.testing.expect(try fx.has(alloc, ".claude.work/.claude.json"));
+    try std.testing.expect(!try fx.has(alloc, ".claude.job.json"));
 }
 
 test "renameIn puts the files back when re-linking fails" {
@@ -410,16 +340,17 @@ test "renameIn puts the files back when re-linking fails" {
     try fx.addProfile(alloc, "work");
     try fx.activate(alloc, "work");
 
-    const cd = try paths.claudeDirIn(alloc, fx.base);
-    defer alloc.free(cd);
-    desktop.deletePathC(alloc, cd);
-    try desktop.mkdirAllC(alloc, cd);
+    const cj = try paths.claudeJsonIn(alloc, fx.base);
+    defer alloc.free(cj);
+    desktop.deletePathC(alloc, cj);
+    try touch(alloc, cj);
 
     try std.testing.expectError(error.NotASymlink, renameIn(alloc, fx.base, "work", "job", .{}));
-    try std.testing.expect(try fx.has(alloc, ".claude.work.json"));
-    try std.testing.expect(try fx.has(alloc, ".claude.work"));
-    try std.testing.expect(!try fx.has(alloc, ".claude.job.json"));
+    try std.testing.expect(try fx.has(alloc, ".claude.work/.claude.json"));
     try std.testing.expect(!try fx.has(alloc, ".claude.job"));
+    const active = (try profile.currentIn(alloc, fx.base)).?;
+    defer alloc.free(active);
+    try std.testing.expectEqualStrings("work", active);
 }
 
 test "renameIn with --desktop renames stored data and the owner marker" {
@@ -441,7 +372,7 @@ test "renameIn with --desktop renames stored data and the owner marker" {
     try std.testing.expect(stored_only.desktop_renamed);
     try std.testing.expect(!stored_only.owner_updated);
     try std.testing.expect(!stored_only.code_renamed);
-    try std.testing.expect(try fx.has(alloc, ".claude.work.json"));
+    try std.testing.expect(try fx.has(alloc, ".claude.work/.claude.json"));
     try std.testing.expect(try fx.has(alloc, "Library/Application Support/Claude.job"));
 
     const owner_home = (try desktop.ownerIn(alloc, fx.base)).?;

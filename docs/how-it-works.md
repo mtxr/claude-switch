@@ -4,8 +4,8 @@
 
 | What | Where |
 |---|---|
-| Profile config | `~/.claude.<profile>.json` and `~/.claude.<profile>/` |
-| Active Code profile | `~/.claude.json` and `~/.claude/` as symlinks to the active profile |
+| Profile | `~/.claude.<profile>/`, a directory that holds the profile's own `.claude.json` |
+| Active Code profile | `~/.claude` as a symlink to the profile directory, and `~/.claude.json` as a symlink to `.claude/.claude.json` |
 | Per-directory binding | `.csw` in each directory you `csw bind` |
 | Desktop owner marker | `~/Library/Application Support/Claude/.csw-profile` |
 | Desktop data of a profile | `~/Library/Application Support/Claude.<profile>/` (a swapped-out data dir) |
@@ -33,6 +33,16 @@ csw does not send credentials anywhere. It makes network requests only to GitHub
 
 ## Profile switching
 
-Switching Claude Code is instant: `~/.claude.json` and `~/.claude/` are symlinks, so changing them is an atomic filesystem operation with no copying.
+Switching Claude Code is instant: `~/.claude` is a symlink to the profile directory and `~/.claude.json` follows it through `.claude/.claude.json`, so a switch changes one symlink atomically, with no copying.
+
+### Where the config lives
+
+Everything a profile owns is inside `~/.claude.<profile>/`, including `.claude.json`. That is exactly where Claude Code looks when `CLAUDE_CONFIG_DIR` points at the directory (the hook, `csw run` and `csw env` all do), so nothing has to be linked there and nothing breaks when Claude Code rewrites the file.
+
+`~/.claude` and `~/.claude.json` only matter for programs that start without `CLAUDE_CONFIG_DIR`. Claude Code replaces `~/.claude.json` with a regular file when it saves it, which detaches it from the profile. csw puts the link back on its next command: the newer content is kept in the profile, and the other version is saved next to it as `.claude.json.csw-bak`.
+
+### Upgrading from the old layout
+
+Versions up to 1.2 kept the config next to the directory as `~/.claude.<profile>.json` and linked into it. The first csw command after the upgrade moves each file into its directory, and the shell hook does it for the profile it uses. It prints one line when it moved something and does nothing afterwards. If both a loose file and a `.claude.json` inside already exist, the newer one is kept and the other is saved as `.claude.json.csw-bak`. Going back to an older csw does not see profiles in the new layout; move each `~/.claude.<profile>/.claude.json` out to `~/.claude.<profile>.json` first.
 
 Claude Desktop uses real directory renames instead (Electron does not follow symlinks for its data directory). On a swap, csw renames `Claude/` to `Claude.<from>/` and `Claude.<to>/` to `Claude/`. Desktop is force-quit with `pkill -9` and reopened only if the target profile has Desktop data.

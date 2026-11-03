@@ -17,9 +17,9 @@ const flag_docs = [_]FlagDoc{
 const FileDoc = struct { path: []const u8, text: []const u8 };
 
 const file_docs = [_]FileDoc{
-    .{ .path = "~/.claude.<name>.json", .text = "Claude Code account configuration of a saved profile." },
-    .{ .path = "~/.claude.<name>/", .text = "Claude Code data directory of a saved profile, used as CLAUDE_CONFIG_DIR." },
-    .{ .path = "~/.claude.json, ~/.claude/", .text = "Symlinks to the active profile, moved by csw use." },
+    .{ .path = "~/.claude.<name>/", .text = "A saved profile: its Claude Code data directory, used as CLAUDE_CONFIG_DIR." },
+    .{ .path = "~/.claude.<name>/.claude.json", .text = "Claude Code account configuration of a saved profile, kept inside its directory." },
+    .{ .path = "~/.claude/, ~/.claude.json", .text = "Links to the active profile, moved together by csw use." },
     .{ .path = ".csw", .text = "Binding file naming the profile for a directory tree, written by csw bind." },
     .{ .path = "~/Library/Application Support/Claude/.csw-profile", .text = "Marker naming the profile that owns the Claude Desktop data directory (macOS)." },
 };

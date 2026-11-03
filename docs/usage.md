@@ -54,10 +54,10 @@ csw records which profile owns the main Desktop data dir (`~/Library/Application
 
 ## Commands in detail
 
-- **`save [name]`** — Stores the profile's login and migrates `~/.claude.json` and `~/.claude/` to profile paths if they are not managed yet. The login kept is the freshest of the profile's stored login and, for the active profile, the live one.
-- **`use [name]`** — Auto-saves the current profile first, copies the target's login to the live Claude Code entry and re-points `~/.claude.json` and `~/.claude/` at the profile.
-- **`new <name>`** — Creates `~/.claude.<name>.json` and `~/.claude.<name>/`, saves the active profile's login first, clears the live login and activates the new profile. Log in with `csw login <name>`, then `csw save <name>`.
-- **`rename [old] <new>`** — Renames the profile files, re-links the active symlinks and the inner config link, and moves the per-directory Keychain entry. All preconditions are checked before anything changes, and a failure part-way rolls back. It cannot update `.csw` files that name the old profile or running shells whose `CLAUDE_CONFIG_DIR` still points at the old directory, so it tells you to.
+- **`save [name]`** — Stores the profile's login and migrates `~/.claude.json` and `~/.claude/` into the profile directory if they are not managed yet. The login kept is the freshest of the profile's stored login and, for the active profile, the live one.
+- **`use [name]`** — Auto-saves the current profile first, copies the target's login to the live Claude Code entry and re-points `~/.claude` (and with it `~/.claude.json`) at the profile.
+- **`new <name>`** — Creates `~/.claude.<name>/` with an empty `.claude.json`, saves the active profile's login first, clears the live login and activates the new profile. Log in with `csw login <name>`, then `csw save <name>`.
+- **`rename [old] <new>`** — Renames the profile directory (its config moves with it), re-links the active symlinks, and moves the per-directory Keychain entry. All preconditions are checked before anything changes, and a failure part-way rolls back. It cannot update `.csw` files that name the old profile or running shells whose `CLAUDE_CONFIG_DIR` still points at the old directory, so it tells you to.
 - **`delete [name]`** — Removes the profile files and its stored logins. If the profile is active, the live login and the symlinks go too.
 - **`list`** — Lists profiles; `◀` marks the active one.
 - **`whoami`** — Shows the active Claude Code session, the Desktop owner and session, and saved profiles with email, plan and token expiry.

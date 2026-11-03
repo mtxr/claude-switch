@@ -4,6 +4,7 @@ const std = @import("std");
 const credentials = @import("credentials.zig");
 const desktop = @import("desktop.zig");
 const display = @import("display.zig");
+const layout = @import("layout.zig");
 const paths = @import("paths.zig");
 const platform = @import("platform.zig");
 const profile = @import("profile.zig");
@@ -12,7 +13,6 @@ const c = @import("c");
 
 const CONFIG_DIR_VAR = "CLAUDE_CONFIG_DIR";
 const CLAUDE_BINARY = "claude";
-const INNER_CLAUDE_JSON = ".claude.json";
 
 pub fn cmdEnv(gpa: std.mem.Allocator, name: []const u8) !void {
     const h = try paths.home(gpa);
@@ -94,69 +94,20 @@ fn reportPrepareError(gpa: std.mem.Allocator, name: []const u8, e: anyerror) any
     return e;
 }
 
-/// Validates the profile, ensures its config dir exists and exposes the
-/// profile JSON as `<dir>/.claude.json` (where Claude Code looks when
-/// CLAUDE_CONFIG_DIR is set). Returns the config dir (caller frees).
+/// Validates the profile and returns its config dir (caller frees). The dir
+/// holds the profile's own `.claude.json`, which is where Claude Code looks
+/// when CLAUDE_CONFIG_DIR is set. A profile still stored the old way is moved
+/// in first.
 pub fn prepareIn(gpa: std.mem.Allocator, base: []const u8, name: []const u8) ![]const u8 {
     if (!isValidName(name)) return error.InvalidProfileName;
+
+    _ = layout.migrateProfileIn(gpa, base, name) catch false;
 
     const p_json = try paths.profileJsonIn(gpa, base, name);
     defer gpa.free(p_json);
     if (!desktop.pathExists(gpa, p_json)) return error.ProfileNotFound;
 
-    const dir = try paths.profileDirIn(gpa, base, name);
-    errdefer gpa.free(dir);
-    if (!desktop.pathExists(gpa, dir)) try desktop.mkdirAllC(gpa, dir);
-
-    try ensureInnerConfigIn(gpa, dir);
-    return dir;
-}
-
-/// Exposes `~/.claude.<name>.json` as `<dir>/.claude.json`. When Claude Code
-/// has replaced the link with a regular file, the newer of the two contents
-/// is kept in the profile json and the link is restored. A leftover that
-/// cannot be repaired is left untouched, for `csw doctor` to report.
-pub fn ensureInnerConfigIn(gpa: std.mem.Allocator, dir: []const u8) !void {
-    const inner = try std.fs.path.join(gpa, &.{ dir, INNER_CLAUDE_JSON });
-    defer gpa.free(inner);
-    if (desktop.isSymlink(gpa, inner)) return;
-
-    const name = profileNameOfDir(dir) orelse return error.NotAProfileDir;
-    const base = std.fs.path.dirname(dir) orelse return error.NotAProfileDir;
-    const p_json = try paths.profileJsonIn(gpa, base, name);
-    defer gpa.free(p_json);
-
-    if (desktop.pathExists(gpa, inner)) return repairRegularInner(gpa, inner, p_json) catch {};
-    try replaceWithLink(gpa, p_json, inner);
-}
-
-fn repairRegularInner(gpa: std.mem.Allocator, inner: []const u8, p_json: []const u8) !void {
-    const inner_ns = regularFileMtimeNs(inner) orelse return error.NotARegularFile;
-    const outer_ns = regularFileMtimeNs(p_json);
-    if (outer_ns == null or inner_ns > outer_ns.?) try desktop.renameC(gpa, inner, p_json);
-    try replaceWithLink(gpa, p_json, inner);
-}
-
-fn replaceWithLink(gpa: std.mem.Allocator, target: []const u8, link: []const u8) !void {
-    const staging = try std.fmt.allocPrint(gpa, "{s}.csw-tmp", .{link});
-    defer gpa.free(staging);
-    desktop.deletePathC(gpa, staging);
-    const target_z = try gpa.dupeSentinel(u8, target, 0);
-    defer gpa.free(target_z);
-    const staging_z = try gpa.dupeSentinel(u8, staging, 0);
-    defer gpa.free(staging_z);
-    if (std.c.symlink(target_z, staging_z) != 0) return error.SymlinkFailed;
-    desktop.renameC(gpa, staging, link) catch |e| {
-        desktop.deletePathC(gpa, staging);
-        return e;
-    };
-}
-
-fn regularFileMtimeNs(path: []const u8) ?i128 {
-    const io = std.Io.Threaded.global_single_threaded.io();
-    const st = std.Io.Dir.cwd().statFile(io, path, .{}) catch return null;
-    if (st.kind != .file) return null;
-    return st.mtime.nanoseconds;
+    return paths.profileDirIn(gpa, base, name);
 }
 
 pub fn profileNameOfDir(dir: []const u8) ?[]const u8 {
@@ -313,245 +264,61 @@ test "prepareIn rejects invalid and unknown profiles" {
     try std.testing.expectError(error.ProfileNotFound, prepareIn(alloc, base, "ghost"));
 }
 
-test "prepareIn creates dir and links inner .claude.json" {
+test "prepareIn returns the profile dir that holds its own config" {
     const alloc = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const base = try tmpBase(alloc, &tmp);
     defer alloc.free(base);
 
+    const expected_dir = try paths.profileDirIn(alloc, base, "work");
+    defer alloc.free(expected_dir);
+    try desktop.mkdirAllC(alloc, expected_dir);
     const p_json = try paths.profileJsonIn(alloc, base, "work");
     defer alloc.free(p_json);
     try touch(alloc, p_json);
 
     const dir = try prepareIn(alloc, base, "work");
     defer alloc.free(dir);
-    const expected_dir = try paths.profileDirIn(alloc, base, "work");
-    defer alloc.free(expected_dir);
     try std.testing.expectEqualStrings(expected_dir, dir);
-
-    const inner = try std.fs.path.join(alloc, &.{ dir, ".claude.json" });
-    defer alloc.free(inner);
-    var buf: [std.fs.max_path_bytes]u8 = undefined;
-    const n = try desktop.readLinkC(alloc, inner, &buf);
-    try std.testing.expectEqualStrings(p_json, buf[0..n]);
+    try std.testing.expect(!desktop.isSymlink(alloc, p_json));
 
     const again = try prepareIn(alloc, base, "work");
     defer alloc.free(again);
     try std.testing.expectEqualStrings(dir, again);
 }
 
-const InnerFixture = struct {
-    tmp: std.testing.TmpDir,
-    base: []const u8,
-    outer: []const u8,
-    inner: []const u8,
-    dir: []const u8,
-
-    fn init(alloc: std.mem.Allocator) !InnerFixture {
-        var tmp = std.testing.tmpDir(.{});
-        errdefer tmp.cleanup();
-        const base = try tmpBase(alloc, &tmp);
-        errdefer alloc.free(base);
-        const outer = try paths.profileJsonIn(alloc, base, "work");
-        errdefer alloc.free(outer);
-        const dir = try paths.profileDirIn(alloc, base, "work");
-        errdefer alloc.free(dir);
-        const inner = try std.fs.path.join(alloc, &.{ dir, ".claude.json" });
-        errdefer alloc.free(inner);
-        try tmp.dir.createDir(std.Options.debug_io, ".claude.work", .default_dir);
-        return .{ .tmp = tmp, .base = base, .outer = outer, .inner = inner, .dir = dir };
-    }
-
-    fn deinit(self: *InnerFixture, alloc: std.mem.Allocator) void {
-        alloc.free(self.inner);
-        alloc.free(self.dir);
-        alloc.free(self.outer);
-        alloc.free(self.base);
-        self.tmp.cleanup();
-    }
-
-    fn write(self: *InnerFixture, sub_path: []const u8, data: []const u8, mtime_sec: i64) !void {
-        try self.tmp.dir.writeFile(std.Options.debug_io, .{ .sub_path = sub_path, .data = data });
-        var path_buf: [std.fs.max_path_bytes]u8 = undefined;
-        const path = try std.fmt.bufPrintSentinel(&path_buf, "{s}/{s}", .{ self.base, sub_path }, 0);
-        const times = [2]std.c.timespec{
-            .{ .sec = @intCast(mtime_sec), .nsec = 0 },
-            .{ .sec = @intCast(mtime_sec), .nsec = 0 },
-        };
-        if (std.c.utimensat(std.c.AT.FDCWD, path, &times, 0) != 0) return error.SetMtimeFailed;
-    }
-
-    fn read(self: *InnerFixture, alloc: std.mem.Allocator, sub_path: []const u8) ![]u8 {
-        return self.tmp.dir.readFileAlloc(std.Options.debug_io, sub_path, alloc, .limited(1024));
-    }
-};
-
-test "ensureInnerConfigIn keeps a newer regular inner config and links it back" {
+test "prepareIn moves a profile stored the old way into its directory" {
     const alloc = std.testing.allocator;
-    var fx = try InnerFixture.init(alloc);
-    defer fx.deinit(alloc);
-    try fx.write(".claude.work.json", "old", 1000);
-    try fx.write(".claude.work/.claude.json", "new", 2000);
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const base = try tmpBase(alloc, &tmp);
+    defer alloc.free(base);
 
-    try ensureInnerConfigIn(alloc, fx.dir);
+    try tmp.dir.writeFile(std.Options.debug_io, .{ .sub_path = ".claude.work.json", .data = "mine" });
+    try tmp.dir.createDir(std.Options.debug_io, ".claude.work", .default_dir);
+    const legacy = try paths.legacyProfileJsonIn(alloc, base, "work");
+    defer alloc.free(legacy);
+    const p_json = try paths.profileJsonIn(alloc, base, "work");
+    defer alloc.free(p_json);
+    const legacy_z = try alloc.dupeSentinel(u8, legacy, 0);
+    defer alloc.free(legacy_z);
+    const p_json_z = try alloc.dupeSentinel(u8, p_json, 0);
+    defer alloc.free(p_json_z);
+    try std.testing.expectEqual(@as(c_int, 0), std.c.symlink(legacy_z, p_json_z));
 
-    try std.testing.expect(desktop.isSymlink(alloc, fx.inner));
-    const merged = try fx.read(alloc, ".claude.work.json");
-    defer alloc.free(merged);
-    try std.testing.expectEqualStrings("new", merged);
-    const through_link = try fx.read(alloc, ".claude.work/.claude.json");
-    defer alloc.free(through_link);
-    try std.testing.expectEqualStrings("new", through_link);
-}
+    const dir = try prepareIn(alloc, base, "work");
+    defer alloc.free(dir);
 
-test "ensureInnerConfigIn keeps the profile json when the inner config is older" {
-    const alloc = std.testing.allocator;
-    var fx = try InnerFixture.init(alloc);
-    defer fx.deinit(alloc);
-    try fx.write(".claude.work.json", "fresh", 2000);
-    try fx.write(".claude.work/.claude.json", "stale", 1000);
-
-    try ensureInnerConfigIn(alloc, fx.dir);
-
-    try std.testing.expect(desktop.isSymlink(alloc, fx.inner));
-    const kept = try fx.read(alloc, ".claude.work.json");
-    defer alloc.free(kept);
-    try std.testing.expectEqualStrings("fresh", kept);
-}
-
-test "ensureInnerConfigIn prefers the profile json when mtimes are equal" {
-    const alloc = std.testing.allocator;
-    var fx = try InnerFixture.init(alloc);
-    defer fx.deinit(alloc);
-    try fx.write(".claude.work.json", "outer", 1500);
-    try fx.write(".claude.work/.claude.json", "inner", 1500);
-
-    try ensureInnerConfigIn(alloc, fx.dir);
-
-    const kept = try fx.read(alloc, ".claude.work.json");
-    defer alloc.free(kept);
-    try std.testing.expectEqualStrings("outer", kept);
-}
-
-test "ensureInnerConfigIn adopts the inner config when the profile json is missing" {
-    const alloc = std.testing.allocator;
-    var fx = try InnerFixture.init(alloc);
-    defer fx.deinit(alloc);
-    try fx.write(".claude.work/.claude.json", "only", 1000);
-
-    try ensureInnerConfigIn(alloc, fx.dir);
-
-    try std.testing.expect(desktop.isSymlink(alloc, fx.inner));
-    const adopted = try fx.read(alloc, ".claude.work.json");
-    defer alloc.free(adopted);
-    try std.testing.expectEqualStrings("only", adopted);
-}
-
-test "ensureInnerConfigIn leaves an inner path that is not a regular file alone" {
-    const alloc = std.testing.allocator;
-    var fx = try InnerFixture.init(alloc);
-    defer fx.deinit(alloc);
-    try fx.write(".claude.work.json", "outer", 1000);
-    try fx.tmp.dir.createDir(std.Options.debug_io, ".claude.work/.claude.json", .default_dir);
-
-    try ensureInnerConfigIn(alloc, fx.dir);
-
-    try std.testing.expect(!desktop.isSymlink(alloc, fx.inner));
-    const kept = try fx.read(alloc, ".claude.work.json");
-    defer alloc.free(kept);
-    try std.testing.expectEqualStrings("outer", kept);
-}
-
-test "ensureInnerConfigIn clears a leftover staging link" {
-    const alloc = std.testing.allocator;
-    var fx = try InnerFixture.init(alloc);
-    defer fx.deinit(alloc);
-    try fx.write(".claude.work.json", "outer", 1000);
-    const staging = try std.fmt.allocPrint(alloc, "{s}.csw-tmp", .{fx.inner});
-    defer alloc.free(staging);
-    const staging_z = try alloc.dupeSentinel(u8, staging, 0);
-    defer alloc.free(staging_z);
-    try std.testing.expectEqual(@as(c_int, 0), std.c.symlink("/nonexistent", staging_z));
-
-    try ensureInnerConfigIn(alloc, fx.dir);
-
-    try std.testing.expect(desktop.isSymlink(alloc, fx.inner));
-    try std.testing.expect(!desktop.isSymlink(alloc, staging));
-}
-
-test "replaceWithLink removes its staging link when the target path is a directory" {
-    const alloc = std.testing.allocator;
-    var fx = try InnerFixture.init(alloc);
-    defer fx.deinit(alloc);
-    try fx.tmp.dir.createDir(std.Options.debug_io, ".claude.work/.claude.json", .default_dir);
-    const staging = try std.fmt.allocPrint(alloc, "{s}.csw-tmp", .{fx.inner});
-    defer alloc.free(staging);
-
-    try std.testing.expectError(error.RenameFailed, replaceWithLink(alloc, fx.outer, fx.inner));
-    try std.testing.expect(!desktop.isSymlink(alloc, staging));
-}
-
-test "replaceWithLink fails when the staging link cannot be created" {
-    const alloc = std.testing.allocator;
-    var fx = try InnerFixture.init(alloc);
-    defer fx.deinit(alloc);
-    const missing = try std.fs.path.join(alloc, &.{ fx.base, "no-such-dir", "link" });
-    defer alloc.free(missing);
-    try std.testing.expectError(error.SymlinkFailed, replaceWithLink(alloc, fx.outer, missing));
-}
-
-test "prepareIn repairs a newer regular inner .claude.json" {
-    const alloc = std.testing.allocator;
-    var fx = try InnerFixture.init(alloc);
-    defer fx.deinit(alloc);
-    try fx.write(".claude.work.json", "old", 1000);
-    try fx.write(".claude.work/.claude.json", "new", 2000);
-
-    const out = try prepareIn(alloc, fx.base, "work");
-    defer alloc.free(out);
-
-    try std.testing.expect(desktop.isSymlink(alloc, fx.inner));
-    const merged = try fx.read(alloc, ".claude.work.json");
-    defer alloc.free(merged);
-    try std.testing.expectEqualStrings("new", merged);
+    try std.testing.expect(!desktop.isSymlink(alloc, p_json));
+    try std.testing.expect(!desktop.pathExists(alloc, legacy));
+    const content = try tmp.dir.readFileAlloc(std.Options.debug_io, ".claude.work/.claude.json", alloc, .limited(64));
+    defer alloc.free(content);
+    try std.testing.expectEqualStrings("mine", content);
 }
 
 test "profileNameOfDir extracts the profile name" {
     try std.testing.expectEqualStrings("work", profileNameOfDir("/Users/m/.claude.work").?);
     try std.testing.expect(profileNameOfDir("/Users/m/.claude.") == null);
     try std.testing.expect(profileNameOfDir("/Users/m/other") == null);
-}
-
-test "ensureInnerConfigIn links the profile json and is idempotent" {
-    const alloc = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    const base = try tmpBase(alloc, &tmp);
-    defer alloc.free(base);
-
-    const p_json = try paths.profileJsonIn(alloc, base, "work");
-    defer alloc.free(p_json);
-    try touch(alloc, p_json);
-    const dir = try paths.profileDirIn(alloc, base, "work");
-    defer alloc.free(dir);
-    try desktop.mkdirAllC(alloc, dir);
-
-    try ensureInnerConfigIn(alloc, dir);
-    try ensureInnerConfigIn(alloc, dir);
-    const inner = try std.fs.path.join(alloc, &.{ dir, ".claude.json" });
-    defer alloc.free(inner);
-    try std.testing.expect(desktop.isSymlink(alloc, inner));
-}
-
-test "ensureInnerConfigIn rejects a dir that is not a profile dir" {
-    const alloc = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    const base = try tmpBase(alloc, &tmp);
-    defer alloc.free(base);
-    const dir = try std.fs.path.join(alloc, &.{ base, "plain" });
-    defer alloc.free(dir);
-    try desktop.mkdirAllC(alloc, dir);
-    try std.testing.expectError(error.NotAProfileDir, ensureInnerConfigIn(alloc, dir));
 }

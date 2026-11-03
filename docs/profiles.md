@@ -39,6 +39,22 @@ On every prompt the hook finds the nearest `.csw` walking up from the current di
 - The first export of a profile in a shell seeds its Keychain entry and reports the result on stderr, so stdout stays safe to `eval`.
 - `csw unbind` removes the `.csw` in the current directory.
 
+### Binding a whole tree
+
+The search walks up through every parent directory, so one `.csw` covers everything below it, and the closest one to where you start wins:
+
+```
+~/Code/work/.csw             # work
+~/Code/work/api/             # work (inherited)
+~/Code/work/side-project/.csw  # personal (overrides work for this tree)
+~/Code/personal/.csw         # personal
+```
+
+Git worktrees follow the same rule, so where they live matters:
+
+- A worktree created inside the repository (for example `repo/.claude/worktrees/feature`) inherits the repository's `.csw`.
+- A worktree created next to the repository (for example `repo-worktrees/feature`) is not below it, so the repository's `.csw` does not apply there. Git does not copy untracked files into a new worktree either, although some tools do (Claude Code copies what a `.worktreeinclude` file lists). Put the `.csw` in a parent folder that holds both, such as `~/Code/work`.
+
 ## Shell completions
 
 `eval "$(csw hook zsh)"` (or `bash`; in fish, `csw hook fish | source`) also registers completions, so no extra file or `fpath` change is needed. If you only want completions, use `csw completion zsh`, `csw completion bash` or `csw completion fish`; for fish you can also save the output to `~/.config/fish/completions/csw.fish`, and for zsh you can also save the output as `_csw` in a directory on your `fpath`. Completions cover commands, the flags valid for each command, saved profile names and shell names, and are generated from the same command table as `--help`.

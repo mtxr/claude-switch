@@ -9,6 +9,7 @@ const completion = @import("completion.zig");
 const credentials = @import("credentials.zig");
 const doctor = @import("doctor.zig");
 const keychain = @import("keychain.zig");
+const layout = @import("layout.zig");
 const manpage = @import("manpage.zig");
 const desktop = @import("desktop.zig");
 const isolated = @import("isolated.zig");
@@ -156,6 +157,30 @@ fn cmdCheckUpdateBg(gpa: std.mem.Allocator, io: std.Io) void {
     _ = std.c.write(fd, json.ptr, json.len);
 }
 
+/// Whether the command should first move profiles stored the old way into
+/// their directories. Commands that only print text, the per-prompt hook
+/// helper (it moves the one profile it uses) and `doctor` (which reports the
+/// state as it is) leave the disk alone.
+pub fn migratesLayout(args: []const []const u8) bool {
+    const cmd = if (args.len > 0) args[0] else "";
+    const leaves_disk_alone = [_][]const u8{ "hook", "completion", "man", "doctor", "update", "--version", "-v", "--help", "-h", "help", "--check-update-bg" };
+    for (leaves_disk_alone) |name| {
+        if (std.mem.eql(u8, cmd, name)) return false;
+    }
+    if (std.mem.eql(u8, cmd, "env") and hasFlag(args, FROM_CWD_FLAG)) return false;
+    return true;
+}
+
+fn moveOldLayoutIn(gpa: std.mem.Allocator, quiet: bool) void {
+    const h = paths.home(gpa) catch return;
+    defer gpa.free(h);
+    const moved = layout.migrateAllIn(gpa, h) catch return;
+    if (moved == 0 or quiet) return;
+    const msg = std.fmt.allocPrint(gpa, "Moved {d} profile config(s) into their directories (~/.claude.<name>/.claude.json)", .{moved}) catch return;
+    defer gpa.free(msg);
+    display.info(msg);
+}
+
 fn run(gpa: std.mem.Allocator, io: std.Io, args: []const []const u8) !void {
     const cmd = if (args.len > 0) args[0] else "";
     if (std.mem.eql(u8, cmd, "--check-update-bg")) {
@@ -167,6 +192,8 @@ fn run(gpa: std.mem.Allocator, io: std.Io, args: []const []const u8) !void {
         std.mem.eql(u8, cmd, "--version") or
         std.mem.eql(u8, cmd, "-v");
     if (!skip_check) checkUpdateSilent(gpa, io);
+
+    if (migratesLayout(args)) moveOldLayoutIn(gpa, std.mem.eql(u8, cmd, "_profiles"));
 
     if (args.len == 0) return profile.cmdPick(gpa, io, .{});
 
@@ -953,4 +980,16 @@ test "every command in the table is dispatched by run" {
         defer std.testing.allocator.free(literal);
         try std.testing.expect(std.mem.indexOf(u8, source, literal) != null);
     }
+}
+
+test "migratesLayout skips text-only commands, doctor and the hook helper" {
+    try std.testing.expect(migratesLayout(&.{"list"}));
+    try std.testing.expect(migratesLayout(&.{ "use", "work" }));
+    try std.testing.expect(migratesLayout(&.{"_profiles"}));
+    try std.testing.expect(migratesLayout(&.{}));
+    try std.testing.expect(migratesLayout(&.{ "env", "work" }));
+    try std.testing.expect(!migratesLayout(&.{ "env", "--from-cwd" }));
+    try std.testing.expect(!migratesLayout(&.{ "hook", "zsh" }));
+    try std.testing.expect(!migratesLayout(&.{"doctor"}));
+    try std.testing.expect(!migratesLayout(&.{"--version"}));
 }
