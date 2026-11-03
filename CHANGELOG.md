@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.0](https://github.com/mtxr/claude-switch/compare/v1.2.1...v1.3.0) (2026-11-03)
+
+
+### Features
+
+* **profiles:** keep each profile's .claude.json inside its directory ([#61](https://github.com/mtxr/claude-switch/issues/61)) ([849f7ee](https://github.com/mtxr/claude-switch/commit/849f7ee2686699a32c5a6bd89fdd36562d391b25))
+
 ## [1.2.1](https://github.com/mtxr/claude-switch/compare/v1.2.0...v1.2.1) (2026-10-28)
 
 
