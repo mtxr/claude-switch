@@ -54,11 +54,11 @@ pub fn legacyNamesIn(gpa: std.mem.Allocator, base: []const u8) ![]const []const 
 
     const base_z = try gpa.dupeSentinel(u8, base, 0);
     defer gpa.free(base_z);
-    const handle = c.opendir(base_z) orelse return results.toOwnedSlice(gpa);
-    defer _ = c.closedir(handle);
+    const handle = std.c.opendir(base_z) orelse return results.toOwnedSlice(gpa);
+    defer _ = std.c.closedir(handle);
 
-    while (c.readdir(handle)) |entry| {
-        const full = entry.*.d_name;
+    while (std.c.readdir(handle)) |entry| {
+        const full = entry.*.name;
         const end = std.mem.indexOfScalar(u8, &full, 0) orelse full.len;
         const name = full[0..end];
         if (!std.mem.startsWith(u8, name, LEGACY_PREFIX)) continue;
