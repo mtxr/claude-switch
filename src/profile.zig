@@ -416,12 +416,12 @@ pub fn listIn(gpa: std.mem.Allocator, base: []const u8) ![]const []const u8 {
     const base_z = try gpa.dupeSentinel(u8, base, 0);
     defer gpa.free(base_z);
 
-    const dir_handle = c.opendir(base_z) orelse return results.toOwnedSlice(gpa);
-    defer _ = c.closedir(dir_handle);
+    const dir_handle = std.c.opendir(base_z) orelse return results.toOwnedSlice(gpa);
+    defer _ = std.c.closedir(dir_handle);
 
     const prefix = ".claude.";
-    while (c.readdir(dir_handle)) |entry| {
-        const full = entry.*.d_name;
+    while (std.c.readdir(dir_handle)) |entry| {
+        const full = entry.*.name;
         const end = std.mem.indexOfScalar(u8, &full, 0) orelse full.len;
         const name = full[0..end];
         if (!std.mem.startsWith(u8, name, prefix) or name.len == prefix.len) continue;

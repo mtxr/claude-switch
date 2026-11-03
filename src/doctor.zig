@@ -89,12 +89,12 @@ fn orphanDirsIn(gpa: std.mem.Allocator, base: []const u8, profiles: []const []co
 
     const base_z = try gpa.dupeSentinel(u8, base, 0);
     defer gpa.free(base_z);
-    const handle = c.opendir(base_z) orelse return results.toOwnedSlice(gpa);
-    defer _ = c.closedir(handle);
+    const handle = std.c.opendir(base_z) orelse return results.toOwnedSlice(gpa);
+    defer _ = std.c.closedir(handle);
 
     const prefix = ".claude.";
-    while (c.readdir(handle)) |entry| {
-        const full = entry.*.d_name;
+    while (std.c.readdir(handle)) |entry| {
+        const full = entry.*.name;
         const end = std.mem.indexOfScalar(u8, &full, 0) orelse full.len;
         const name = full[0..end];
         if (!std.mem.startsWith(u8, name, prefix) or name.len == prefix.len) continue;
@@ -127,8 +127,8 @@ fn isDirectory(gpa: std.mem.Allocator, base: []const u8, name: []const u8) bool 
     defer gpa.free(full);
     const full_z = gpa.dupeSentinel(u8, full, 0) catch return false;
     defer gpa.free(full_z);
-    const handle = c.opendir(full_z) orelse return false;
-    _ = c.closedir(handle);
+    const handle = std.c.opendir(full_z) orelse return false;
+    _ = std.c.closedir(handle);
     return true;
 }
 
