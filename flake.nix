@@ -3,17 +3,22 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
-    flake-utils.url = "github:numtide/flake-utils";
     zig-overlay = {
       url = "github:mitchellh/zig-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
-      inputs.flake-utils.follows = "flake-utils";
     };
   };
 
-  outputs = { self, nixpkgs, flake-utils, zig-overlay }:
+  outputs = { self, nixpkgs, zig-overlay }:
     let
       lib = nixpkgs.lib;
+      supportedSystems = [ "aarch64-darwin" "x86_64-linux" "aarch64-linux" ];
+
+      # Build per-system outputs, then transpose them into the
+      # `<output>.<system>` layout that flakes expect.
+      eachSystem = f: lib.genAttrs supportedSystems f;
+      transpose = perSystem: attr: lib.mapAttrs (_: outputs: outputs.${attr}) perSystem;
+
       zonLines = lib.splitString "\n" (builtins.readFile ./build.zig.zon);
       versionLine = lib.findFirst (line: lib.hasInfix ".version = " line) "" zonLines;
       version = builtins.head (builtins.match ''.*"([^"]+)".*'' versionLine);
@@ -134,7 +139,9 @@
         };
       };
     }
-    // flake-utils.lib.eachSystem [ "aarch64-darwin" "x86_64-linux" "aarch64-linux" ] (system:
+    // (
+      let
+      perSystem = eachSystem (system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
         zig = zigFor system;
@@ -169,4 +176,7 @@
           tests = mkTests { inherit pkgs zig; };
         };
       });
+      in
+      lib.genAttrs [ "packages" "apps" "devShells" "checks" ] (transpose perSystem)
+    );
 }
