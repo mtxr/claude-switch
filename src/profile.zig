@@ -6,10 +6,12 @@ const desktop = @import("desktop.zig");
 const display = @import("display.zig");
 const isolated = @import("isolated.zig");
 const keychain = @import("keychain.zig");
+const layout = @import("layout.zig");
 const paths = @import("paths.zig");
 const picker = @import("picker.zig");
 const platform = @import("platform.zig");
 const session = @import("session.zig");
+const testutil = @import("testutil.zig");
 
 const c = @import("c");
 
@@ -157,8 +159,10 @@ pub fn cmdNew(gpa: std.mem.Allocator, io: std.Io, name: []const u8, opts: Option
     defer gpa.free(p_json);
     const p_dir = try paths.profileDirIn(gpa, h, name);
     defer gpa.free(p_dir);
+    const legacy_json = try paths.legacyProfileJsonIn(gpa, h, name);
+    defer gpa.free(legacy_json);
 
-    if (desktop.pathExists(gpa, p_json) or desktop.pathExists(gpa, p_dir)) {
+    if (desktop.pathExists(gpa, p_dir) or desktop.pathExists(gpa, legacy_json)) {
         display.print("❌  Profile '{s}' files already exist. Use: csw use {s}\n", .{ name, name });
         return error.ProfileAlreadyExists;
     }
@@ -168,6 +172,7 @@ pub fn cmdNew(gpa: std.mem.Allocator, io: std.Io, name: []const u8, opts: Option
     defer if (previous) |p| gpa.free(p);
     if (previous) |p| _ = try desktop.adoptOwnerIn(gpa, h, p);
 
+    try desktop.mkdirAllC(gpa, p_dir);
     {
         const p_json_z = try gpa.dupeSentinel(u8, p_json, 0);
         defer gpa.free(p_json_z);
@@ -176,7 +181,6 @@ pub fn cmdNew(gpa: std.mem.Allocator, io: std.Io, name: []const u8, opts: Option
         _ = std.c.write(fd, "{}", 2);
         _ = std.c.close(fd);
     }
-    try desktop.mkdirAllC(gpa, p_dir);
 
     if (opts.code) {
         if (previous) |p| _ = try credentials.capture(gpa, io, h, p, KEYCHAIN_CODE, true);
@@ -238,8 +242,6 @@ pub fn cmdDelete(gpa: std.mem.Allocator, io: std.Io, name_opt: ?[]const u8, opts
     };
     defer gpa.free(name);
 
-    const p_json = try paths.profileJsonIn(gpa, h, name);
-    defer gpa.free(p_json);
     const p_dir = try paths.profileDirIn(gpa, h, name);
     defer gpa.free(p_dir);
     const d_dir = try paths.desktopProfileDirIn(gpa, h, name);
@@ -249,7 +251,7 @@ pub fn cmdDelete(gpa: std.mem.Allocator, io: std.Io, name_opt: ?[]const u8, opts
     defer if (desktop_owner) |o| gpa.free(o);
     const owns_desktop = desktop_owner != null and std.mem.eql(u8, desktop_owner.?, name);
 
-    const has_code = desktop.pathExists(gpa, p_json) or desktop.pathExists(gpa, p_dir);
+    const has_code = desktop.pathExists(gpa, p_dir);
     const has_desktop = desktop.pathExists(gpa, d_dir) or owns_desktop;
     if (!(opts.code and has_code) and !(opts.desktop and has_desktop)) {
         display.print("❌  Profile '{s}' not found\n", .{name});
@@ -257,7 +259,7 @@ pub fn cmdDelete(gpa: std.mem.Allocator, io: std.Io, name_opt: ?[]const u8, opts
     }
 
     if (opts.desktop) try isolated.refuseWhenOpen(gpa, io, h, name);
-    if (opts.code) try deleteCodeIn(gpa, io, h, name, p_json, p_dir);
+    if (opts.code) try deleteCodeIn(gpa, io, h, name, p_dir);
     if (opts.desktop) try deleteDesktopIn(gpa, io, h, d_dir, owns_desktop);
     if (!opts.desktop and desktop.pathExists(gpa, d_dir)) {
         display.info("Claude Desktop data kept; use --desktop to remove it");
@@ -271,18 +273,15 @@ pub fn cmdDelete(gpa: std.mem.Allocator, io: std.Io, name_opt: ?[]const u8, opts
     display.ok(msg);
 }
 
-fn deleteCodeIn(gpa: std.mem.Allocator, io: std.Io, h: []const u8, name: []const u8, p_json: []const u8, p_dir: []const u8) !void {
-    const cj = try paths.claudeJsonIn(gpa, h);
-    defer gpa.free(cj);
-
-    var link_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const is_active = blk: {
-        const n = desktop.readLinkC(gpa, cj, &link_buf) catch break :blk false;
-        break :blk std.mem.eql(u8, link_buf[0..n], p_json);
-    };
+fn deleteCodeIn(gpa: std.mem.Allocator, io: std.Io, h: []const u8, name: []const u8, p_dir: []const u8) !void {
+    const active = try currentIn(gpa, h);
+    defer if (active) |a| gpa.free(a);
+    const is_active = active != null and std.mem.eql(u8, active.?, name);
 
     if (is_active) {
         keychain.delete(gpa, io, KEYCHAIN_CODE) catch {};
+        const cj = try paths.claudeJsonIn(gpa, h);
+        defer gpa.free(cj);
         const cd = try paths.claudeDirIn(gpa, h);
         defer gpa.free(cd);
         for ([_][]const u8{ cj, cd }) |l| {
@@ -292,7 +291,6 @@ fn deleteCodeIn(gpa: std.mem.Allocator, io: std.Io, h: []const u8, name: []const
 
     try credentials.forget(gpa, io, h, name);
 
-    if (desktop.pathExists(gpa, p_json)) desktop.deletePathC(gpa, p_json);
     if (desktop.pathExists(gpa, p_dir)) try deleteTreeC(gpa, io, p_dir);
 }
 
@@ -407,6 +405,7 @@ pub fn cmdLogoutAll(gpa: std.mem.Allocator, io: std.Io, opts: Options) !void {
     }
 }
 
+/// Profiles on disk: every `~/.claude.<name>/` directory that holds a `.claude.json`.
 pub fn listIn(gpa: std.mem.Allocator, base: []const u8) ![]const []const u8 {
     var results: std.ArrayList([]const u8) = .empty;
     errdefer {
@@ -420,16 +419,17 @@ pub fn listIn(gpa: std.mem.Allocator, base: []const u8) ![]const []const u8 {
     const dir_handle = c.opendir(base_z) orelse return results.toOwnedSlice(gpa);
     defer _ = c.closedir(dir_handle);
 
+    const prefix = ".claude.";
     while (c.readdir(dir_handle)) |entry| {
         const full = entry.*.d_name;
         const end = std.mem.indexOfScalar(u8, &full, 0) orelse full.len;
         const name = full[0..end];
-        if (!std.mem.startsWith(u8, name, ".claude.")) continue;
-        if (!std.mem.endsWith(u8, name, ".json")) continue;
-        const min_len = ".claude.".len + ".json".len;
-        if (name.len <= min_len) continue;
-        const stem = name[".claude.".len .. name.len - ".json".len];
-        try results.append(gpa, try gpa.dupe(u8, stem));
+        if (!std.mem.startsWith(u8, name, prefix) or name.len == prefix.len) continue;
+
+        const config = try std.fs.path.join(gpa, &.{ base, name, paths.CONFIG_FILE });
+        defer gpa.free(config);
+        if (!desktop.pathExists(gpa, config)) continue;
+        try results.append(gpa, try gpa.dupe(u8, name[prefix.len..]));
     }
 
     const result = try results.toOwnedSlice(gpa);
@@ -441,20 +441,9 @@ pub fn listIn(gpa: std.mem.Allocator, base: []const u8) ![]const []const u8 {
     return result;
 }
 
+/// The active profile: the one `~/.claude` is linked to.
 pub fn currentIn(gpa: std.mem.Allocator, base: []const u8) !?[]const u8 {
-    const link = try paths.claudeJsonIn(gpa, base);
-    defer gpa.free(link);
-
-    var buf: [std.fs.max_path_bytes]u8 = undefined;
-    const n = desktop.readLinkC(gpa, link, &buf) catch return null;
-    const target = buf[0..n];
-
-    const fname = std.fs.path.basename(target);
-    if (!std.mem.startsWith(u8, fname, ".claude.")) return null;
-    if (!std.mem.endsWith(u8, fname, ".json")) return null;
-    const stem = fname[".claude.".len .. fname.len - ".json".len];
-    if (stem.len == 0) return null;
-    return @as(?[]const u8, try gpa.dupe(u8, stem));
+    return layout.activeIn(gpa, base);
 }
 
 pub fn profileJsonEmailIn(gpa: std.mem.Allocator, base: []const u8, name: []const u8) !?[]const u8 {
@@ -497,6 +486,8 @@ pub fn switchLinkIn(gpa: std.mem.Allocator, link: []const u8, target: []const u8
     if (std.c.symlink(target_z, link_z) != 0) return error.SymlinkFailed;
 }
 
+/// Makes `name` the active profile. Only `~/.claude` is switched: `~/.claude.json`
+/// is a link through it, so the two always move together.
 pub fn switchLinksIn(gpa: std.mem.Allocator, base: []const u8, name: []const u8) !void {
     const p_json = try paths.profileJsonIn(gpa, base, name);
     defer gpa.free(p_json);
@@ -507,20 +498,23 @@ pub fn switchLinksIn(gpa: std.mem.Allocator, base: []const u8, name: []const u8)
         display.print("❌  Profile config not found: {s}\nRun: csw new {s}\n", .{ p_json, name });
         return error.ProfileNotFound;
     }
-    if (!desktop.pathExists(gpa, p_dir)) {
-        display.print("❌  Profile dir not found: {s}\nRun: csw new {s}\n", .{ p_dir, name });
-        return error.ProfileNotFound;
-    }
 
     const cj = try paths.claudeJsonIn(gpa, base);
     defer gpa.free(cj);
     const cd = try paths.claudeDirIn(gpa, base);
     defer gpa.free(cd);
 
-    try switchLinkIn(gpa, cj, p_json, false);
-    try switchLinkIn(gpa, cd, p_dir, true);
+    if (!desktop.isSymlink(gpa, cj) and desktop.pathExists(gpa, cj)) {
+        display.print("❌  {s} exists and is not a symlink. Run 'csw save <name>' first.\n", .{cj});
+        return error.NotASymlink;
+    }
+
+    try switchLinkIn(gpa, cd, p_dir, false);
+    try layout.replaceWithLink(gpa, layout.OUTER_LINK_TARGET, cj);
 }
 
+/// Adopts a `~/.claude.json` and `~/.claude/` that csw does not manage yet as
+/// the profile `name`, and links them back.
 pub fn migrateToProfileIn(gpa: std.mem.Allocator, io: std.Io, base: []const u8, name: []const u8) !void {
     const cj = try paths.claudeJsonIn(gpa, base);
     defer gpa.free(cj);
@@ -531,19 +525,10 @@ pub fn migrateToProfileIn(gpa: std.mem.Allocator, io: std.Io, base: []const u8, 
     const p_dir = try paths.profileDirIn(gpa, base, name);
     defer gpa.free(p_dir);
 
-    if (!desktop.isSymlink(gpa, cj) and desktop.pathExists(gpa, cj)) {
-        const msg = try std.fmt.allocPrint(gpa, "Migrating ~/.claude.json → .claude.{s}.json", .{name});
-        defer gpa.free(msg);
-        display.info(msg);
-        try desktop.renameC(gpa, cj, p_json);
-        const pj_z = try gpa.dupeSentinel(u8, p_json, 0);
-        defer gpa.free(pj_z);
-        const cj_z = try gpa.dupeSentinel(u8, cj, 0);
-        defer gpa.free(cj_z);
-        if (std.c.symlink(pj_z, cj_z) != 0) return error.SymlinkFailed;
-    }
+    const dir_is_real = !desktop.isSymlink(gpa, cd) and desktop.pathExists(gpa, cd);
+    const json_is_real = !desktop.isSymlink(gpa, cj) and desktop.pathExists(gpa, cj);
 
-    if (!desktop.isSymlink(gpa, cd) and desktop.pathExists(gpa, cd)) {
+    if (dir_is_real) {
         const msg = try std.fmt.allocPrint(gpa, "Migrating ~/.claude/ → .claude.{s}/", .{name});
         defer gpa.free(msg);
         display.info(msg);
@@ -555,6 +540,16 @@ pub fn migrateToProfileIn(gpa: std.mem.Allocator, io: std.Io, base: []const u8, 
         if (std.c.symlink(pd_z, cd_z) != 0) return error.SymlinkFailed;
     }
 
+    if (json_is_real) {
+        const msg = try std.fmt.allocPrint(gpa, "Migrating ~/.claude.json → .claude.{s}/.claude.json", .{name});
+        defer gpa.free(msg);
+        display.info(msg);
+        if (!desktop.pathExists(gpa, p_dir)) try desktop.mkdirAllC(gpa, p_dir);
+        try desktop.renameC(gpa, cj, p_json);
+        try layout.replaceWithLink(gpa, p_json, cj);
+        _ = layout.repairOuterLinkIn(gpa, base) catch false;
+    }
+
     _ = io;
 }
 
@@ -564,7 +559,7 @@ fn ensureCurrentSavedIn(gpa: std.mem.Allocator, io: std.Io, base: []const u8) !v
     const cd = try paths.claudeDirIn(gpa, base);
     defer gpa.free(cd);
 
-    if (desktop.isSymlink(gpa, cj)) return;
+    if (desktop.isSymlink(gpa, cj) or desktop.isSymlink(gpa, cd)) return;
     if (!desktop.pathExists(gpa, cj) and !desktop.pathExists(gpa, cd)) return;
 
     display.print("⚠️  Your current ~/.claude.json and ~/.claude/ are not managed by csw.\n", .{});
@@ -704,14 +699,7 @@ test "listIn finds profiles in sorted order" {
     const base = try alloc.dupe(u8, base_buf[0..base_len]);
     defer alloc.free(base);
 
-    for (&[_][]const u8{ "work", "personal" }) |name| {
-        const p = try paths.profileJsonIn(alloc, base, name);
-        defer alloc.free(p);
-        const p_z = try alloc.dupeSentinel(u8, p, 0);
-        defer alloc.free(p_z);
-        const fd = std.c.open(p_z, .{ .ACCMODE = .WRONLY, .CREAT = true }, @as(std.c.mode_t, 0o644));
-        if (fd >= 0) _ = std.c.close(fd);
-    }
+    for (&[_][]const u8{ "work", "personal" }) |name| try testutil.addProfile(alloc, base, name, "{}");
 
     const result = try listIn(alloc, base);
     defer {
@@ -743,18 +731,16 @@ test "currentIn returns the active profile" {
     const base = try alloc.dupe(u8, base_buf[0..base_len]);
     defer alloc.free(base);
 
-    const p_json = try paths.profileJsonIn(alloc, base, "work");
-    defer alloc.free(p_json);
-    const p_z = try alloc.dupeSentinel(u8, p_json, 0);
+    try testutil.addProfile(alloc, base, "work", "{}");
+    const p_dir = try paths.profileDirIn(alloc, base, "work");
+    defer alloc.free(p_dir);
+    const p_z = try alloc.dupeSentinel(u8, p_dir, 0);
     defer alloc.free(p_z);
-    const fd = std.c.open(p_z, .{ .ACCMODE = .WRONLY, .CREAT = true }, @as(std.c.mode_t, 0o644));
-    if (fd >= 0) _ = std.c.close(fd);
-
-    const cj = try paths.claudeJsonIn(alloc, base);
-    defer alloc.free(cj);
-    const cj_z = try alloc.dupeSentinel(u8, cj, 0);
-    defer alloc.free(cj_z);
-    if (std.c.symlink(p_z, cj_z) != 0) return error.SymlinkFailed;
+    const cd = try paths.claudeDirIn(alloc, base);
+    defer alloc.free(cd);
+    const cd_z = try alloc.dupeSentinel(u8, cd, 0);
+    defer alloc.free(cd_z);
+    if (std.c.symlink(p_z, cd_z) != 0) return error.SymlinkFailed;
 
     const result = try currentIn(alloc, base);
     defer if (result) |r| alloc.free(r);
@@ -770,16 +756,7 @@ test "emailIn parses email from JSON" {
     const base = try alloc.dupe(u8, base_buf[0..base_len]);
     defer alloc.free(base);
 
-    const path = try paths.profileJsonIn(alloc, base, "work");
-    defer alloc.free(path);
-    const path_z = try alloc.dupeSentinel(u8, path, 0);
-    defer alloc.free(path_z);
-    const fd = std.c.open(path_z, .{ .ACCMODE = .WRONLY, .CREAT = true }, @as(std.c.mode_t, 0o644));
-    if (fd >= 0) {
-        const content = "{\"oauthAccount\":{\"emailAddress\":\"me@work.com\"}}";
-        _ = std.c.write(fd, content.ptr, content.len);
-        _ = std.c.close(fd);
-    }
+    try testutil.addProfile(alloc, base, "work", "{\"oauthAccount\":{\"emailAddress\":\"me@work.com\"}}");
 
     const result = try profileJsonEmailIn(alloc, base, "work");
     defer if (result) |r| alloc.free(r);
@@ -795,15 +772,7 @@ test "pickerLinesIn aligns name and email" {
     const base = try alloc.dupe(u8, base_buf[0..base_len]);
     defer alloc.free(base);
 
-    const p = try paths.profileJsonIn(alloc, base, "work");
-    defer alloc.free(p);
-    const p_z = try alloc.dupeSentinel(u8, p, 0);
-    defer alloc.free(p_z);
-    const fd = std.c.open(p_z, .{ .ACCMODE = .WRONLY, .CREAT = true }, @as(std.c.mode_t, 0o644));
-    try std.testing.expect(fd >= 0);
-    const json = "{\"oauthAccount\":{\"emailAddress\":\"me@work.com\"}}";
-    _ = std.c.write(fd, json.ptr, json.len);
-    _ = std.c.close(fd);
+    try testutil.addProfile(alloc, base, "work", "{\"oauthAccount\":{\"emailAddress\":\"me@work.com\"}}");
 
     const lines = try pickerLinesIn(alloc, base, &.{ "personal", "work" });
     defer {
@@ -877,7 +846,7 @@ fn testIo() std.Io.Threaded {
 }
 
 fn linkAndCurrent(alloc: std.mem.Allocator, td: TestDir, target: []const u8) !?[]const u8 {
-    const link = try paths.claudeJsonIn(alloc, td.base);
+    const link = try paths.claudeDirIn(alloc, td.base);
     defer alloc.free(link);
     const link_z = try alloc.dupeSentinel(u8, link, 0);
     defer alloc.free(link_z);
@@ -891,9 +860,10 @@ test "listIn ignores files that are not profiles" {
     const alloc = std.testing.allocator;
     var td = try TestDir.init(alloc);
     defer td.deinit(alloc);
-    const noise = [_][]const u8{ ".claude.json", ".claude..json", "other.json", ".claude.work", ".claude.x.txt" };
+    const noise = [_][]const u8{ ".claude.json", ".claude..json", "other.json", ".claude.x.txt", ".claude.old.json" };
     for (noise) |n| try td.write(alloc, n, "{}");
-    try td.write(alloc, ".claude.ok.json", "{}");
+    try td.mkdir(alloc, ".claude.no-config");
+    try testutil.addProfile(alloc, td.base, "ok", "{}");
 
     const result = try listIn(alloc, td.base);
     defer {
@@ -925,18 +895,8 @@ test "currentIn ignores a symlink with an empty profile name" {
     const alloc = std.testing.allocator;
     var td = try TestDir.init(alloc);
     defer td.deinit(alloc);
-    try td.write(alloc, ".claude..json", "x");
-    const target = try td.join(alloc, ".claude..json");
-    defer alloc.free(target);
-    try std.testing.expectEqual(@as(?[]const u8, null), try linkAndCurrent(alloc, td, target));
-}
-
-test "currentIn ignores a symlink with the right prefix and wrong suffix" {
-    const alloc = std.testing.allocator;
-    var td = try TestDir.init(alloc);
-    defer td.deinit(alloc);
-    try td.write(alloc, ".claude.work.txt", "x");
-    const target = try td.join(alloc, ".claude.work.txt");
+    try td.mkdir(alloc, ".claude.");
+    const target = try td.join(alloc, ".claude.");
     defer alloc.free(target);
     try std.testing.expectEqual(@as(?[]const u8, null), try linkAndCurrent(alloc, td, target));
 }
@@ -948,13 +908,13 @@ test "profileJsonEmailIn returns null for a missing, empty or invalid file" {
 
     try std.testing.expectEqual(@as(?[]const u8, null), try profileJsonEmailIn(alloc, td.base, "none"));
 
-    try td.write(alloc, ".claude.empty.json", "");
+    try testutil.addProfile(alloc, td.base, "empty", "");
     try std.testing.expectEqual(@as(?[]const u8, null), try profileJsonEmailIn(alloc, td.base, "empty"));
 
-    try td.write(alloc, ".claude.bad.json", "not json");
+    try testutil.addProfile(alloc, td.base, "bad", "not json");
     try std.testing.expectEqual(@as(?[]const u8, null), try profileJsonEmailIn(alloc, td.base, "bad"));
 
-    try td.write(alloc, ".claude.noemail.json", "{\"oauthAccount\":{}}");
+    try testutil.addProfile(alloc, td.base, "noemail", "{\"oauthAccount\":{}}");
     try std.testing.expectEqual(@as(?[]const u8, null), try profileJsonEmailIn(alloc, td.base, "noemail"));
 }
 
@@ -1015,15 +975,18 @@ test "switchLinksIn points json and dir at the profile" {
     const alloc = std.testing.allocator;
     var td = try TestDir.init(alloc);
     defer td.deinit(alloc);
-    try td.write(alloc, ".claude.work.json", "{}");
-    try td.mkdir(alloc, ".claude.work");
+    try testutil.addProfile(alloc, td.base, "work", "mine");
     try switchLinksIn(alloc, td.base, "work");
 
     var buf: [std.fs.max_path_bytes]u8 = undefined;
     const json_target = (try td.linkTarget(alloc, ".claude.json", &buf)).?;
-    try std.testing.expect(std.mem.endsWith(u8, json_target, ".claude.work.json"));
+    try std.testing.expectEqualStrings(layout.OUTER_LINK_TARGET, json_target);
     const dir_target = (try td.linkTarget(alloc, ".claude", &buf)).?;
     try std.testing.expect(std.mem.endsWith(u8, dir_target, ".claude.work"));
+
+    const through = try td.tmp.dir.readFileAlloc(std.Options.debug_io, ".claude.json", alloc, .limited(64));
+    defer alloc.free(through);
+    try std.testing.expectEqualStrings("mine", through);
 }
 
 test "migrateToProfileIn moves real files and leaves symlinks" {
@@ -1039,10 +1002,11 @@ test "migrateToProfileIn moves real files and leaves symlinks" {
 
     try migrateToProfileIn(alloc, tio.io(), td.base, "work");
 
-    try std.testing.expect(try td.exists(alloc, ".claude.work.json"));
+    try std.testing.expect(try td.exists(alloc, ".claude.work/.claude.json"));
     try std.testing.expect(try td.exists(alloc, ".claude.work/.credentials.json"));
     var buf: [std.fs.max_path_bytes]u8 = undefined;
-    try std.testing.expect((try td.linkTarget(alloc, ".claude.json", &buf)) != null);
+    const json_target = (try td.linkTarget(alloc, ".claude.json", &buf)).?;
+    try std.testing.expectEqualStrings(layout.OUTER_LINK_TARGET, json_target);
     try std.testing.expect((try td.linkTarget(alloc, ".claude", &buf)) != null);
 
     const email = try profileJsonEmailIn(alloc, td.base, "work");
@@ -1077,7 +1041,7 @@ test "migrateToProfileIn creates no profile when there is nothing to migrate" {
     var tio = testIo();
     defer tio.deinit();
     try migrateToProfileIn(alloc, tio.io(), td.base, "work");
-    try std.testing.expect(!try td.exists(alloc, ".claude.work.json"));
+    try std.testing.expect(!try td.exists(alloc, ".claude.work"));
 }
 
 test "pickerLinesIn uses only the name when there is no email" {
@@ -1177,11 +1141,10 @@ test "full command flow in a temporary HOME (without Desktop only)" {
     try cmdList(alloc, io, .{});
 
     try cmdDelete(alloc, io, "personal", .{});
-    try std.testing.expect(!try td.exists(alloc, ".claude.personal.json"));
     try std.testing.expect(!try td.exists(alloc, ".claude.personal"));
 
     try cmdDelete(alloc, io, "work", .{});
-    try std.testing.expect(!try td.exists(alloc, ".claude.work.json"));
+    try std.testing.expect(!try td.exists(alloc, ".claude.work"));
     var buf: [std.fs.max_path_bytes]u8 = undefined;
     try std.testing.expectEqual(@as(?[]const u8, null), try td.linkTarget(alloc, ".claude.json", &buf));
 }
@@ -1205,7 +1168,7 @@ test "logout-all removes active symlinks (without Desktop only)" {
 
     var buf: [std.fs.max_path_bytes]u8 = undefined;
     try std.testing.expectEqual(@as(?[]const u8, null), try td.linkTarget(alloc, ".claude.json", &buf));
-    try std.testing.expect(try td.exists(alloc, ".claude.work.json"));
+    try std.testing.expect(try td.exists(alloc, ".claude.work/.claude.json"));
 }
 
 test "pickNameIn fails when there are no profiles" {

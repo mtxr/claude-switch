@@ -6,7 +6,7 @@
 
 - **Claude Code** — whether a login is present.
 - **Claude Desktop** (macOS) — `Claude.app`, the process, `Claude Safe Storage`, the data dir, the cookies DB and the session cookie.
-- **Profiles** — active and saved profiles, the Desktop owner, profile json without a directory, orphan directories, an inner `.claude.json` that became a regular file, profiles without a stored login, leftover legacy `csw-code-*` entries (macOS), and a profile whose login sits in both the live entry and its per-directory entry.
+- **Profiles** — active and saved profiles, the Desktop owner, orphan directories (a `~/.claude.<name>/` without a `.claude.json`), configs still stored the old way, whether `~/.claude.json` follows the active profile, profiles without a stored login, leftover legacy `csw-code-*` entries (macOS), and a profile whose login sits in both the live entry and its per-directory entry.
 - **Shell** — what `CLAUDE_CONFIG_DIR` points at, the `.csw` that applies here, and whether the hook is loaded. The hook is reported as "not detected (optional)" unless a `.csw` applies and the hook is clearly missing.
 - **Tools** — which picker is used: `sk`, `fzf` or the built-in one. A missing `sk`/`fzf` is not a problem.
 

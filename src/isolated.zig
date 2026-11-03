@@ -4,6 +4,7 @@ const std = @import("std");
 const desktop = @import("desktop.zig");
 const display = @import("display.zig");
 const paths = @import("paths.zig");
+const testutil = @import("testutil.zig");
 const platform = @import("platform.zig");
 const run = @import("run.zig");
 
@@ -102,9 +103,7 @@ test "prepareIn validates the name and the profile" {
     try std.testing.expectError(error.InvalidProfileName, prepareIn(alloc, base, "a/b"));
     try std.testing.expectError(error.ProfileNotFound, prepareIn(alloc, base, "work"));
 
-    const p_json = try paths.profileJsonIn(alloc, base, "work");
-    defer alloc.free(p_json);
-    try touch(alloc, p_json);
+    try testutil.addProfile(alloc, base, "work", "");
     const dir = try prepareIn(alloc, base, "work");
     defer alloc.free(dir);
     try std.testing.expect(desktop.pathExists(alloc, dir));
