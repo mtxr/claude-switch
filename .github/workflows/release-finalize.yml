@@ -78,7 +78,7 @@ jobs:
             echo "::notice::HOMEBREW_TAP_TOKEN is not set, skipping the Homebrew tap update"
           fi
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         if: steps.tap.outputs.enabled == 'true'
 
       - name: Render the formula
@@ -122,7 +122,7 @@ jobs:
       TAG: ${{ inputs.tag }}
       GH_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: main
 
@@ -141,7 +141,7 @@ jobs:
             echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - uses: DeterminateSystems/nix-installer-action@v20
+      - uses: DeterminateSystems/nix-installer-action@v23
         if: steps.diff.outputs.changed == 'true'
 
       # The pull request is opened with GITHUB_TOKEN, so CI does not run on it: validate here instead.
