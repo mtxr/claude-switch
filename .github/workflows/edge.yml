@@ -34,7 +34,7 @@ jobs:
     if: "!startsWith(github.event.head_commit.message, 'chore(main): release')"
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Test the notes generator
         run: |
@@ -61,7 +61,7 @@ jobs:
       group: edge-build-${{ matrix.asset }}-${{ github.ref }}
       cancel-in-progress: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ env.EDGE_SHA }}
 
@@ -88,7 +88,7 @@ jobs:
           cp zig-out/bin/csw "zig-out/bin/${{ matrix.asset }}"
 
       - name: Keep the binary as a workflow artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: edge-${{ matrix.asset }}
           path: zig-out/bin/${{ matrix.asset }}
@@ -102,7 +102,7 @@ jobs:
       group: edge-notes-${{ github.ref }}
       cancel-in-progress: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ env.EDGE_SHA }}
           fetch-depth: 0
@@ -128,7 +128,7 @@ jobs:
           cat notes/notes.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Keep the notes as a workflow artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: edge-notes
           path: notes/notes.md
@@ -150,7 +150,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       REPO: ${{ github.repository }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ env.EDGE_SHA }}
 
@@ -172,7 +172,7 @@ jobs:
 
       - name: Download the built binaries and notes
         if: steps.tip.outputs.superseded != 'true'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: edge-*
           merge-multiple: true
@@ -198,7 +198,7 @@ jobs:
 
       - name: Attest build provenance
         if: steps.tip.outputs.superseded != 'true'
-        uses: actions/attest-build-provenance@v2.4.0
+        uses: actions/attest-build-provenance@v4.2.2
         with:
           subject-path: |
             dist/csw-*

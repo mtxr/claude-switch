@@ -14,7 +14,7 @@ jobs:
     name: Build static Linux binaries
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Zig 0.17.0
         uses: mlugg/setup-zig@v2
@@ -42,7 +42,7 @@ jobs:
           zsh -n _csw
           fish --no-execute csw.fish
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: linux-binaries
           path: bin/
@@ -62,9 +62,9 @@ jobs:
           - fedora:latest
           - archlinux:latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: linux-binaries
           path: bin
@@ -80,9 +80,9 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: linux-binaries
           path: bin
