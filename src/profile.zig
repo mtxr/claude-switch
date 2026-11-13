@@ -141,7 +141,7 @@ fn useCodeIn(gpa: std.mem.Allocator, io: std.Io, h: []const u8, name: []const u8
 
 fn useDesktopIn(gpa: std.mem.Allocator, io: std.Io, h: []const u8, name: []const u8, cur: ?[]const u8) !void {
     try isolated.refuseWhenOpen(gpa, io, h, name);
-    desktop.quit(gpa, io);
+    try desktop.quitForSwap(gpa, io);
     const has_desktop = desktop.hasData(gpa, name);
     try desktop.swap(gpa, cur, name);
     if (has_desktop) desktop.launch(gpa, io);
@@ -188,7 +188,7 @@ pub fn cmdNew(gpa: std.mem.Allocator, io: std.Io, name: []const u8, opts: Option
         try switchLinksIn(gpa, h, name);
     }
     if (opts.desktop) {
-        desktop.quit(gpa, io);
+        try desktop.quitForSwap(gpa, io);
         try desktop.swap(gpa, previous, name);
     }
 
@@ -295,7 +295,7 @@ fn deleteCodeIn(gpa: std.mem.Allocator, io: std.Io, h: []const u8, name: []const
 }
 
 fn deleteDesktopIn(gpa: std.mem.Allocator, io: std.Io, h: []const u8, d_dir: []const u8, owns_desktop: bool) !void {
-    if (owns_desktop) desktop.quit(gpa, io);
+    if (owns_desktop) try desktop.quitForSwap(gpa, io);
     const dd = try paths.desktopDirIn(gpa, h);
     defer gpa.free(dd);
     if (desktop.isSymlink(gpa, dd)) desktop.deletePathC(gpa, dd);
