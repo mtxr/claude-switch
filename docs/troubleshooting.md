@@ -26,6 +26,6 @@ Limits that come from the platform or from Claude Code itself:
 - **Editors.** IDE extensions may ignore `CLAUDE_CONFIG_DIR`, in which case they keep using the active profile.
 - **`.csw` and `rename`.** Renaming a profile does not edit `.csw` files that name it or already-running shells, because there is no way to find every `.csw` on disk. `rename` tells you what to update.
 - **Desktop quit.** `--desktop` and `--all` ask Claude Desktop to quit, then terminate it and finally kill it if it does not exit, so unsaved state can be lost when Desktop is unresponsive.
-- **Credential size.** Keychain values containing line breaks, or longer than about 4000 bytes, are refused instead of being truncated by `security -i`.
+- **Credential size.** Keychain values containing line breaks are refused. Values longer than about 4000 bytes (for example a login that also holds OAuth tokens for several MCP servers) do not fit through `security -i`, so csw passes them to `security add-generic-password -X` as hex on the command line, the same fallback Claude Code uses. While that command runs, the value is visible in the process list.
 
 - **`csw desktop` login links.** `claude://` links open in the first Claude Desktop that is running, so sign in by copying the code from the browser and pasting it into the window you opened.
