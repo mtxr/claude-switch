@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.1](https://github.com/mtxr/claude-switch/compare/v1.3.0...v1.3.1) (2026-11-23)
+
+
+### Bug Fixes
+
+* **desktop:** abort the swap when Claude Desktop is still running ([#68](https://github.com/mtxr/claude-switch/issues/68)) ([53f1ad9](https://github.com/mtxr/claude-switch/commit/53f1ad935b2bdc63cd5b49ab05d9fa774bd91c45))
+
 ## [1.3.0](https://github.com/mtxr/claude-switch/compare/v1.2.1...v1.3.0) (2026-11-03)
 
 
