@@ -84,6 +84,16 @@ pub fn quit(gpa: std.mem.Allocator, io: std.Io) void {
         display.warnErr("Claude Desktop is still running; close it manually before continuing");
 }
 
+/// Quits Claude Desktop before its data directory is moved. Unlike `quit`,
+/// fails instead of carrying on while Desktop still has the directory open.
+pub fn quitForSwap(gpa: std.mem.Allocator, io: std.Io) error{DesktopStillRunning}!void {
+    quit(gpa, io);
+    if (isRunning(gpa, io)) {
+        display.err("Claude Desktop is still running; nothing was moved. Quit it and try again.");
+        return error.DesktopStillRunning;
+    }
+}
+
 pub fn launch(gpa: std.mem.Allocator, io: std.Io) void {
     if (comptime !platform.supports_desktop) return;
     display.info("Reopening Claude Desktop...");
