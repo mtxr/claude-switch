@@ -14,7 +14,7 @@
 
 ## Credentials
 
-On macOS, Claude Code logins live in the Keychain, never in a csw file. csw writes them through `security -i` over stdin, so a secret never appears in process arguments:
+On macOS, Claude Code logins live in the Keychain, never in a csw file. csw writes them through `security -i` over stdin, so a secret does not appear in process arguments. Logins longer than about 4000 bytes do not fit through `security -i`; those are passed to `security add-generic-password -X` as hex, the same fallback Claude Code uses for its own large entries:
 
 | Keychain service | Purpose |
 |---|---|

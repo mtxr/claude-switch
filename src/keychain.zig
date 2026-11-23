@@ -152,14 +152,67 @@ fn secureWipe(bytes: []u8) void {
     std.crypto.secureZero(u8, bytes);
 }
 
+/// Hex-encodes `value` for `security add-generic-password -X`. Caller wipes and frees.
+pub fn hexEncode(gpa: std.mem.Allocator, value: []const u8) ![]u8 {
+    const digits = "0123456789abcdef";
+    const out = try gpa.alloc(u8, value.len * 2);
+    for (value, 0..) |b, i| {
+        out[2 * i] = digits[b >> 4];
+        out[2 * i + 1] = digits[b & 0x0f];
+    }
+    return out;
+}
+
+/// Stores a value too long for `security -i`, whose reader cuts lines near
+/// 4 KB. The value goes on the command line as hex, the same fallback Claude
+/// Code uses for its own large entries; it is visible to `ps` only while
+/// `security` runs.
+///
+/// The entry is updated in place (`-U`) instead of being deleted first, so a
+/// failed write leaves the existing login untouched. An entry stored under a
+/// different account is removed only after the new one is written.
+fn setViaArgv(gpa: std.mem.Allocator, io: std.Io, service: []const u8, account: []const u8, value: []const u8) !void {
+    const hex = try hexEncode(gpa, value);
+    defer gpa.free(hex);
+    defer secureWipe(hex);
+
+    const old_account: ?[]const u8 = if (exists(gpa, io, service)) getAccount(gpa, io, service) else null;
+    defer if (old_account) |old| gpa.free(old);
+
+    try runSecurity(gpa, io, &.{ "security", "add-generic-password", "-U", "-s", service, "-a", account, "-X", hex });
+
+    if (old_account) |old| {
+        if (!std.mem.eql(u8, old, account))
+            runSecurity(gpa, io, &.{ "security", "delete-generic-password", "-s", service, "-a", old }) catch {};
+    }
+}
+
+fn runSecurity(gpa: std.mem.Allocator, io: std.Io, argv: []const []const u8) !void {
+    const result = try std.process.run(gpa, io, .{
+        .argv = argv,
+        .stdout_limit = .limited(1024),
+        .stderr_limit = .limited(1024),
+    });
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    const success = switch (result.term) {
+        .exited => |code| code == 0,
+        else => false,
+    };
+    if (!success) {
+        @import("display.zig").err(std.mem.trimEnd(u8, result.stderr, "\n\r"));
+        return error.KeychainWriteFailed;
+    }
+}
+
 pub fn set(gpa: std.mem.Allocator, io: std.Io, service: []const u8, account: []const u8, value: []const u8) !void {
     if (comptime !platform.supports_keychain) return error.UnsupportedPlatform;
 
     const command = addCommand(gpa, service, account, value) catch |e| {
-        const display = @import("display.zig");
         switch (e) {
-            error.KeychainValueUnsafe => display.err("Keychain value contains a line break or NUL and cannot be stored safely"),
-            error.KeychainValueTooLong => display.err("Keychain value is too long to store without exposing it on a command line"),
+            error.KeychainValueTooLong => return setViaArgv(gpa, io, service, account, value),
+            error.KeychainValueUnsafe => @import("display.zig").err("Keychain value contains a line break or NUL and cannot be stored safely"),
             else => {},
         }
         return e;
@@ -509,4 +562,55 @@ test "exists reflects whether the entry is present" {
     try std.testing.expect(!exists(alloc, io, svc));
     try set(alloc, io, svc, "user", "value");
     try std.testing.expect(exists(alloc, io, svc));
+}
+
+test "hexEncode encodes every byte as two lowercase digits" {
+    const alloc = std.testing.allocator;
+    const hex = try hexEncode(alloc, "{\"a\":\n\x00\xff}");
+    defer alloc.free(hex);
+    try std.testing.expectEqualStrings("7b2261223a0a00ff7d", hex);
+}
+
+test "set and get round-trip a value too long for security -i" {
+    if (!realKeychainEnabled()) return error.SkipZigTest;
+    const alloc = std.testing.allocator;
+    var tio = std.Io.Threaded.init(std.heap.page_allocator, .{});
+    defer tio.deinit();
+    const io = tio.io();
+    const token = try testutil.uniqueToken(alloc);
+    defer alloc.free(token);
+    const svc = try std.fmt.allocPrint(alloc, "csw-test-{s}-long", .{token});
+    defer alloc.free(svc);
+    delete(alloc, io, svc) catch {};
+    defer delete(alloc, io, svc) catch {};
+
+    var value: std.ArrayList(u8) = .empty;
+    defer value.deinit(alloc);
+    try value.appendSlice(alloc, "{\"claudeAiOauth\":{\"k\":\"");
+    var i: usize = 0;
+    while (i < 12000) : (i += 1) try value.append(alloc, "abc\"$`'\\ "[i % 9]);
+    try value.appendSlice(alloc, "\"}}");
+
+    // A long value replaces an entry stored under another account.
+    try set(alloc, io, svc, "old user", "previous");
+    try set(alloc, io, svc, "test user", value.items);
+    const got = try get(alloc, io, svc);
+    defer alloc.free(got);
+    try std.testing.expectEqualStrings(value.items, got);
+    const acct = getAccount(alloc, io, svc);
+    defer alloc.free(acct);
+    try std.testing.expectEqualStrings("test user", acct);
+
+    // Rewriting a long value updates the entry in place.
+    value.items[value.items.len - 4] = 'Z';
+    try set(alloc, io, svc, "test user", value.items);
+    const again = try get(alloc, io, svc);
+    defer alloc.free(again);
+    try std.testing.expectEqualStrings(value.items, again);
+
+    // Overwriting a long value with a short one goes back through `security -i`.
+    try set(alloc, io, svc, "test user", "short");
+    const short = try get(alloc, io, svc);
+    defer alloc.free(short);
+    try std.testing.expectEqualStrings("short", short);
 }
